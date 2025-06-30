@@ -18,6 +18,7 @@ library(lubridate)
 library(here)
 library(ncdf4)
 library(ggrepel)
+library(tidyverse)
 
 # creat .gitignore file to avoid upload data(too large)
 cat("# Ignore all data files
@@ -65,39 +66,89 @@ nc_close(td2m_nc)
 summary(T2)
 summary(Td)
 
-dim(T2) # result: 38 41 51 730
-#str(t2m_nc)
-# dimension 1 is the grid cell locations (these may match more than one station) (Match these using the documentation - still need to figure this out)
-# dimension 2 is the number of lead times over the 10 days (6 hours) (In the documentation)
-# dimension 3 is the number of ensemble members (50) plus 1 high resolution run 
-# dimension 4 is the number of forcasts 365 * 2 (2 forecasts per day)
-
-validTime_raw
-
-dim(t2m_nc)
-dim(T2)
-t2m_nc[[1]]
-
-T2[1,1:41,1,1]
-
-# From our meeting with Kiri 
-names(t2m_nc$dim)
-t2m_nc$dim$runtime
-table(t2m_nc$dim$runtime$vals)
-t2m_nc$dim$step
-
-# Making sense of meeting with Kir
-str_data_reference_date = t2m_nc$dim$runtime$units 
+# dim(T2) # result: 38 41 51 730
+# #str(t2m_nc)
+# 
+# validTime_raw
+# 
+# dim(t2m_nc)
+# dim(T2)
+# t2m_nc[[1]]
+# 
+# T2[1,1:41,1,1]
+# 
+# # From our meeting with Kiri
+# names(t2m_nc$dim)
+# t2m_nc$dim$runtime
+# table(t2m_nc$dim$runtime$vals)
+# t2m_nc$dim$step
+# 
+# # Making sense of meeting with Kir
+str_data_reference_date = t2m_nc$dim$runtime$units
 data_reference_date = as_date("2021-01-31")
-#TODO: automate this somehow
-date_refs = data_reference_date + t2m_nc$dim$runtime$vals 
-
+# #TODO: automate this somehow
+date_refs = data_reference_date + t2m_nc$dim$runtime$vals
+# 
 date_lookup_df = data.frame(day_i = 1:length(date_refs), date = date_refs)
 
+
+# # dimension 1 is the grid cell locations (these may match more than one station) (Match these using the documentation - still need to figure this out)
+# # dimension 2 is the number of lead times over the 10 days (6 hours) (In the documentation)
+# # dimension 3 is the number of ensemble members (50) plus 1 high resolution run
+# # dimension 4 is the number of forcasts 365 * 2 (2 forecasts per day)
+
+#Here is basiclly what this nc data set looks like
+
 ```
+#Here is basiclly what this nc data set looks like
+combined_raw_2t_2021.nc (Temperature data)
+combined_raw_2d_2021.nc (Dewpoint data)
 
-## Start visualization
+Data Structure (4D array):
+[location, lead_time, ensemble_member, forecasts number(two forecasts daily)]
+[38,       41,        51,              730]
 
+Visual Representation:
+┌─────────────────────────────────────────────┐
+│              Year 2021 Data                 │
+├─────────────────────────────────────────────┤
+│  Forecast Axis (730 forecasts)                        │
+│  ↓                                          │
+│  forecasts 1 
+         ┌─────────────────────────┐         │
+│        │ Loc1  Loc2 ... Loc38   │ ← 38 locations
+│        ├─────────────────────────┤         │
+│        │ 0h  ┌─────────────┐    │         │
+│        │ 6h  │ M1 M2...M51 │    │ ← 51 ensemble members
+│        │ 12h │ Temp values │    │         │
+│        │ ... │   matrix    │    │         │
+│        │240h └─────────────┘    │ ← 41 lead times
+│        └─────────────────────────┘         │
+│                                             │
+│  forecasts 2 
+         ┌─────────────────────────┐         │
+│        │ (same structure)        │         │
+│        └─────────────────────────┘         │
+│  ...                                        │
+│                                             │
+│  forecasts 730 
+           ┌───────────────────────┐         │
+│          │ (same structure)      │         │
+│          └───────────────────────┘         │
+└─────────────────────────────────────────────┘
+
+Example indexing:
+all_data[["2021"]]$T2[1, 1, 1, 1] = Location 1, Hour 0, Member 1, Forecast 1
+all_data[["2021"]]$T2[38, 41, 51, 730] = Location 38, Hour 240, Member 51, Forecast 730
+
+Dimension meanings:
+- gridpoint: [605, 639, 674, ...] (38 station IDs)
+- step: [0, 6, 12, ..., 240] (41 forecast hours)
+- member: 1-50 are ensemble members, 51 is control forecast
+- validTime: [timestamp1, timestamp2, ..., timestamp730] (730 forecast times)
+
+
+## Start visualization(test example created by Kate)
 ```{r}
 lead_times_hours = seq(0, 240, length.out = 41)#
 
@@ -106,7 +157,6 @@ ggplot() +
   geom_line(aes(x = lead_times_hours, T2[1,1:41,2,1]), col = "blue") +
   geom_line(aes(x = lead_times_hours, T2[1,1:41,3,1]), col = "red") 
 
-library(tidyverse)
 raw_forecast_data = T2; loc_i = 1; day_i = 1
 tidy_forecast <- function(raw_forecast_data, day_i, loc_i){
   daily_forecast = raw_forecast_data[loc_i, 1:41, 1:51, day_i] |>
@@ -120,6 +170,7 @@ tidy_forecast <- function(raw_forecast_data, day_i, loc_i){
 }
 
 example_day = tidy_forecast(T2, 1, 1)
+example_day
 
 ggplot(example_day) + 
   geom_line(aes(x = lead_time_hrs, y = Forecast_value, group = Member), alpha = 0.6, col = "gray")
@@ -208,15 +259,67 @@ for (year in available_years) {
 
 # example: extract 2021 temp
 #T2_2021 <- all_data[["2021"]]$T2
+
+```
+
+## create a tidy table for forecast(not completed)
+```{r}
+tidy_forecast <- function(raw_forecast_data, day_i, loc_i) {
+  # extract data
+  daily_forecast <- raw_forecast_data[loc_i, , , day_i] |>
+    as.data.frame()
+  
+  names(daily_forecast) <- paste0("M", 1:ncol(daily_forecast))
+  
+  daily_forecast <- daily_forecast |>
+    mutate(lead_time_hrs = seq(0, 240, length.out = nrow(daily_forecast))) |>
+    pivot_longer(cols = starts_with("M"), 
+                 names_to = "Member", 
+                 values_to = "Forecast_value")
+  
+  return(daily_forecast)
+}
+
+# create tidy table for all years
+create_year_tidy <- function(year_data, loc_i , day_i ) {
+  # temperature
+  temp_tidy <- tidy_forecast(year_data$T2, day_i, loc_i) |>
+    rename(Temperature = Forecast_value)
+  
+  # dew points
+  dewpoint_tidy <- tidy_forecast(year_data$Td, day_i, loc_i) |>
+    select(lead_time_hrs, Member, Dewpoint = Forecast_value)
+  
+  # combine all elements
+  combined <- temp_tidy |>
+    left_join(dewpoint_tidy, by = c("lead_time_hrs", "Member")) |>
+    mutate(
+      year = year_data$year,
+      grid_point_id = year_data$gridpoint[loc_i],
+      valid_time_hours = year_data$validTime[day_i],
+    )
+  
+  return(combined)
+}
+
+# test
+tidy_2021_1_1 <- create_year_tidy(all_data[["2021"]],1,1)
+
+# check results
+head(tidy_2021_1_1)
+tail(tidy_2021_1_1)
+
 ```
 
 ##import meta data to find locations(lon and lat) for gridpoints and their corresponding stations
 ```{r}
 #import meta data
-metadata <- read.csv(here("data", "ToSend-01-20-2025", "prediction_meta.csv"))
+prediction_metadata <- read.csv(here("data", "ToSend-01-20-2025", "prediction_meta.csv"))
 length(metadata$gridpoint)
-
-# find all grid points appeared in our data set
+sta_gp_metadata <- read.csv(here("data", "ToSend-01-20-2025", "sta_gp_metadata.csv"))
+sta_gp_metadata <- sta_gp_metadata %>%
+  select(-X)
+# find all grid points appeared in our all_data data set
 all_gridpoints <- c()
 for (year in names(all_data)) {
   all_gridpoints <- c(all_gridpoints, all_data[[year]]$gridpoint)
@@ -233,18 +336,36 @@ gridpoint_lookup <- data.frame(
 # merge
 gridpoint_lookup <- merge(gridpoint_lookup, metadata,
                          by = "gridpoint",
-                         all.x = TRUE)
+                         all.x = TRUE)%>%select(-data_index)
+gridpoint_lookup <- gridpoint_lookup %>%
+  left_join(sta_gp_metadata, by = c("gridpoint" = "gp"))
+
 gridpoint_lookup
 
 ## Verify guess
 ## There are 38 grid point locations in the data but 46 stations so Kiri guessed that there may be more than one station per grid point - this is worth checking. We will need to follow up about the mapping from grid points to stations. 
 
-unique_stations <- unique(metadata$station_id[metadata$station_id > 0])
-cat("number of different stations:", length(unique_stations), "\n")
+station_count <- gridpoint_lookup %>%
+  group_by(gridpoint) %>%
+  summarise(
+    n_stations = sum(!is.na(station_id)),  # 计算非NA的station数量
+    station_ids = toString(unique(na.omit(station_id)))  # 列出所有station ID
+  ) %>%
+  arrange(desc(n_stations))  # 按station数量降序排列
 
-# only found 38 stations in 38 grid points
+# 查看结果
+station_count
+
+#find those gp with more than 1 stations
+gridpoint_lookup %>%
+  group_by(gridpoint) %>%
+  filter(n() > 1) %>%
+  arrange(gridpoint)
+
+# only found 43 stations in 38 grid points
 ```
-## find station near cities
+
+## find stations near cities
 ```{r}
 # lon and lat for different cities
 cities <- data.frame(
@@ -359,6 +480,10 @@ station_connect_cities_plot_top2
 
 ```
 
+## find stations near grid points
+```{r}
+
+```
 
 
 
