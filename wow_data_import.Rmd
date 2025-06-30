@@ -1,0 +1,63 @@
+---
+title: "wow_data"
+author: "Wenkai_Zhong"
+date: "2025-06-17"
+output: html_document
+---
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+#change R language to english
+Sys.setlocale("LC_TIME", "English")
+rm(list = ls())
+
+library(here)       
+library(tidyverse)  
+library(ncdf4) 
+
+```
+
+#import data
+```{r}
+#import official stations' info
+metadata <- read.csv(here("data", "ToSend-01-20-2025", "prediction_meta.csv"))
+wow_dir <- here("data/2021")
+wow_files <- list.files(wow_dir, pattern = "WOW_NL_2021.*\\.csv$", full.names = TRUE)
+
+#preview the first file
+sample_file <- read.csv(wow_files[1], sep = ";", stringsAsFactors = FALSE)
+cat("Sample data dimensions:", dim(sample_file), "\n")
+
+# WOW data column name: rowId;Id;SiteId;CreatedDateTime;...;Latitude;Longitude;...
+all_wow_data <- list()
+empty_files <- c()  # 初始化空文件列表
+
+for(i in 1:length(wow_files)) {
+  if(i %% 100 == 0) cat("Reading", i, "/", length(wow_files), "\n")
+  
+  # read data split by ;
+  data <- read.csv(wow_files[i], sep = ";", stringsAsFactors = FALSE)
+  
+  #add file date
+  if(nrow(data) > 0) {
+    # add date when file not 0
+    date_str <- gsub(".*WOW_NL_(\\d{8}).*", "\\1", basename(wow_files[i]))
+    data$file_date <- date_str
+    all_wow_data[[length(all_wow_data) + 1]] <- data
+  } else {
+    # record empty file
+    empty_files <- c(empty_files, basename(wow_files[i]))
+  }
+}
+
+cat("\nReading complete!\n")
+cat("- Valid files:", length(all_wow_data), "\n")
+cat("- Empty files:", length(empty_files), "\n")
+
+# merge all
+cat("\nMerging all data...\n")
+combined_wow_data <- do.call(rbind, all_wow_data)
+
+
+length(unique(combined_wow_data$SiteId))
+```
+
