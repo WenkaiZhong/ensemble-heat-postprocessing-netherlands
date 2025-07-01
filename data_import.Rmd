@@ -425,14 +425,22 @@ city_connections <- cities %>%
 
 # Create simple connection map
 city_station_plot = ggplot() +
- # Connection lines
- geom_segment(data = city_connections,
-              aes(x = city_lon, y = city_lat, xend = station_lon, yend = station_lat),
-              alpha = 0.3) +
- 
- # Stations
- geom_point(data = gridpoint_station_table %>% filter(!is.na(sta_id)),
-            aes(x = gp_lon, y = gp_lat), color = "red") +
+  # Connection lines
+  geom_segment(data = city_connections,
+               aes(x = city_lon, y = city_lat, xend = station_lon, yend = station_lat),
+               alpha = 0.3) +
+  
+  # Primary Stations (red)
+  geom_point(data = gridpoint_station_table %>% 
+               filter(!is.na(sta_id) & station_type == "primary"),
+             aes(x = gp_lon, y = gp_lat), 
+             color = "red", size = 3) +
+  
+  # Secondary Stations (yellow.samll size)
+  geom_point(data = gridpoint_station_table %>% 
+               filter(!is.na(sta_id) & station_type == "secondary"),
+             aes(x = gp_lon, y = gp_lat), 
+             color = "gold", size = 2) +
  
  # Cities
  geom_point(data = cities,
@@ -465,48 +473,71 @@ ggsave(
 ```{r}
 # Create visualization
 gridpoint_station_map <- ggplot() +
- # Plot gridpoint points (using squares)
- geom_point(data = gridpoint_station_table,
-            aes(x = gp_lon, y = gp_lat, shape = "Gridpoints"),
-            color = "darkblue") +
- 
- # Plot station points (using circles) - filter out gridpoints without stations
- geom_point(data = gridpoint_station_table %>% filter(!is.na(sta_id)),
-            aes(x = gp_lon, y = gp_lat, shape = "KNMI Stations"),
-            color = "red") +
- 
- # Set shapes
- scale_shape_manual(values = c("Gridpoints" = 15, "KNMI Stations" = 16),
-                    name = "Type") +
- 
- # Add gridpoint labels
- geom_text_repel(data = gridpoint_station_table,
-                 aes(x = gp_lon, y = gp_lat, label = gridpoint),
-                 size = 2.5,
-                 color = "darkblue",
-                 box.padding = 0.3,
-                 point.padding = 0.2,
-                 max.overlaps = 20) +
- 
- # Add station ID labels (only label those with stations)
- geom_text_repel(data = gridpoint_station_table %>% filter(!is.na(sta_id)),
-                 aes(x = gp_lon, y = gp_lat, 
-                     label = paste0("S", sta_id)),
-                 size = 2,
-                 color = "red",
-                 nudge_y = 0.02,
-                 box.padding = 0.2,
-                 point.padding = 0.1,
-                 max.overlaps = 20) +
- 
- labs(title = "ECMWF Gridpoints and KNMI Stations in the Netherlands",
-      x = "Longitude",
-      y = "Latitude") +
- 
- theme_minimal() +
- theme(legend.position = "bottom",
-       plot.title = element_text(hjust = 0.5),
-       plot.subtitle = element_text(hjust = 0.5))
+  # Plot gridpoint points (using squares)
+  geom_point(data = gridpoint_station_table,
+             aes(x = gp_lon, y = gp_lat, shape = "Gridpoints"),
+             color = "darkblue") +
+  
+  # Plot primary stations (red)
+  geom_point(data = gridpoint_station_table %>% 
+               filter(!is.na(sta_id) & station_type == "primary"),
+             aes(x = gp_lon, y = gp_lat, shape = "Primary Stations"),
+             color = "red") +
+  
+  # Plot secondary stations (yellow)
+  geom_point(data = gridpoint_station_table %>% 
+               filter(!is.na(sta_id) & station_type == "secondary"),
+             aes(x = gp_lon, y = gp_lat, shape = "Secondary Stations"),
+             color = "gold") +
+  
+  # Set shapes
+  scale_shape_manual(values = c("Gridpoints" = 15, 
+                               "Primary Stations" = 16,
+                               "Secondary Stations" = 17),
+                     name = "Type") +
+  
+  # Add gridpoint labels
+  geom_text_repel(data = gridpoint_station_table,
+                  aes(x = gp_lon, y = gp_lat, label = gridpoint),
+                  size = 2.5,
+                  color = "darkblue",
+                  box.padding = 0.3,
+                  point.padding = 0.2,
+                  max.overlaps = 20) +
+  
+  # Add primary station labels (red)
+  geom_text_repel(data = gridpoint_station_table %>% 
+                    filter(!is.na(sta_id) & station_type == "primary"),
+                  aes(x = gp_lon, y = gp_lat, 
+                      label = paste0("S", sta_id)),
+                  size = 2,
+                  color = "red",
+                  nudge_y = 0.02,
+                  box.padding = 0.2,
+                  point.padding = 0.1,
+                  max.overlaps = 20) +
+  
+  # Add secondary station labels (yellow)
+  geom_text_repel(data = gridpoint_station_table %>% 
+                    filter(!is.na(sta_id) & station_type == "secondary"),
+                  aes(x = gp_lon, y = gp_lat, 
+                      label = paste0("S", sta_id)),
+                  size = 2,
+                  color = "gold",
+                  nudge_y = -0.02,  #avoid overlapping
+                  box.padding = 0.2,
+                  point.padding = 0.1,
+                  max.overlaps = 20) +
+  
+  labs(title = "ECMWF Gridpoints and KNMI Stations in the Netherlands",
+       subtitle = "Primary stations (red) vs Secondary stations (yellow)",
+       x = "Longitude",
+       y = "Latitude") +
+  
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5),
+        plot.subtitle = element_text(hjust = 0.5))
 
 gridpoint_station_map
 
