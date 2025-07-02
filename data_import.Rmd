@@ -19,6 +19,7 @@ library(here)
 library(ncdf4)
 library(ggrepel)
 library(tidyverse)
+library(plotly)
 
 # creat .gitignore file to avoid upload data(too large)
 cat("# Ignore all data files
@@ -415,11 +416,11 @@ city_connections <- cities %>%
  rowwise() %>%
  mutate(
    # Calculate distances to all stations
-   distances = list(sqrt((gridpoint_station_table$gp_lat - city_lat)^2 + 
-                        (gridpoint_station_table$gp_lon - city_lon)^2) * 111),
+   distances = list(sqrt((gridpoint_station_table$sta_lat - city_lat)^2 + 
+                        (gridpoint_station_table$sta_lon - city_lon)^2) * 111),
    nearest_idx = which.min(distances),
-   station_lat = gridpoint_station_table$gp_lat[nearest_idx],
-   station_lon = gridpoint_station_table$gp_lon[nearest_idx],
+   station_lat = gridpoint_station_table$sta_lat[nearest_idx],
+   station_lon = gridpoint_station_table$sta_lon[nearest_idx],
    distance_km = round(min(distances), 1)
  )
 
@@ -432,15 +433,15 @@ city_station_plot = ggplot() +
   
   # Primary Stations (red)
   geom_point(data = gridpoint_station_table %>% 
-               filter(!is.na(sta_id) & station_type == "primary"),
-             aes(x = gp_lon, y = gp_lat), 
-             color = "red", size = 3) +
+               filter(station_type == "primary"),
+             aes(x = sta_lon, y = sta_lat), 
+             color = "red", size = 2) +
   
   # Secondary Stations (yellow.samll size)
   geom_point(data = gridpoint_station_table %>% 
-               filter(!is.na(sta_id) & station_type == "secondary"),
-             aes(x = gp_lon, y = gp_lat), 
-             color = "gold", size = 2) +
+               filter(station_type == "secondary"),
+             aes(x = sta_lon, y = sta_lat), 
+             color = "gold", size = 1) +
  
  # Cities
  geom_point(data = cities,
@@ -450,7 +451,11 @@ city_station_plot = ggplot() +
  geom_text_repel(data = cities ,
                  aes(x = city_lon, y = city_lat, label = city),
                  size = 3) +
- 
+  
+ geom_text_repel(data = gridpoint_station_table ,
+                 aes(x = sta_lon, y = sta_lat, label = sta_id),
+                 size = 2) +
+  
  labs(title = "Cities and Nearest Weather Stations",
      subtitle = "City points size is determinted by its population rank",
      x = "Longitude", y = "Latitude")+
@@ -460,6 +465,7 @@ city_station_plot = ggplot() +
 
 city_station_plot
 
+
 ggsave(
   filename = "Cities and Nearest Weather Stations.png",
   path = "../Honours_project/graph",
@@ -467,12 +473,17 @@ ggsave(
   height = 694/100,
   dpi = 300
 )
+
 ```
 
 ## find stations near grid points,for some gridpoints like 819 , it has 2 relate stations but same station_id different sta_lat and sta_lon
 ```{r}
 # Create visualization
 gridpoint_station_map <- ggplot() +
+  # Connection lines
+  geom_segment(data = gridpoint_station_table,
+               aes(x = gp_lon, y = gp_lat, xend = sta_lon, yend = sta_lat),
+               alpha = 0.3) +
   # Plot gridpoint points (using squares)
   geom_point(data = gridpoint_station_table,
              aes(x = gp_lon, y = gp_lat, shape = "Gridpoints"),
@@ -481,13 +492,13 @@ gridpoint_station_map <- ggplot() +
   # Plot primary stations (red)
   geom_point(data = gridpoint_station_table %>% 
                filter(!is.na(sta_id) & station_type == "primary"),
-             aes(x = gp_lon, y = gp_lat, shape = "Primary Stations"),
+             aes(x = sta_lon, y = sta_lat, shape = "Primary Stations"),
              color = "red") +
   
   # Plot secondary stations (yellow)
   geom_point(data = gridpoint_station_table %>% 
                filter(!is.na(sta_id) & station_type == "secondary"),
-             aes(x = gp_lon, y = gp_lat, shape = "Secondary Stations"),
+             aes(x = sta_lon, y = sta_lat, shape = "Secondary Stations"),
              color = "gold") +
   
   # Set shapes
@@ -508,7 +519,7 @@ gridpoint_station_map <- ggplot() +
   # Add primary station labels (red)
   geom_text_repel(data = gridpoint_station_table %>% 
                     filter(!is.na(sta_id) & station_type == "primary"),
-                  aes(x = gp_lon, y = gp_lat, 
+                  aes(x = sta_lon, y = sta_lat, 
                       label = paste0("S", sta_id)),
                   size = 2,
                   color = "red",
@@ -520,7 +531,7 @@ gridpoint_station_map <- ggplot() +
   # Add secondary station labels (yellow)
   geom_text_repel(data = gridpoint_station_table %>% 
                     filter(!is.na(sta_id) & station_type == "secondary"),
-                  aes(x = gp_lon, y = gp_lat, 
+                  aes(x = sta_lon, y = sta_lat, 
                       label = paste0("S", sta_id)),
                   size = 2,
                   color = "gold",
