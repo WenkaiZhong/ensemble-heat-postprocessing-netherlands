@@ -20,6 +20,8 @@ library(ncdf4)
 library(ggrepel)
 library(tidyverse)
 library(plotly)
+#library(sf)
+#library(rnaturalearth)
 
 # creat .gitignore file to avoid upload data(too large)
 cat("# Ignore all data files
@@ -465,7 +467,6 @@ city_station_plot = ggplot() +
 
 city_station_plot
 
-
 ggsave(
   filename = "Cities and Nearest Weather Stations.png",
   path = "../Honours_project/graph",
@@ -479,7 +480,10 @@ ggsave(
 ## find stations near grid points,for some gridpoints like 819 , it has 2 relate stations but same station_id different sta_lat and sta_lon
 ```{r}
 # Create visualization
+netherlands <- ne_countries(country = "netherlands", returnclass = "sf", scale = "medium")
+
 gridpoint_station_map <- ggplot() +
+  #geom_sf(data = netherlands, fill = NA, color = "black", size = 0.8) +
   # Connection lines
   geom_segment(data = gridpoint_station_table,
                aes(x = gp_lon, y = gp_lat, xend = sta_lon, yend = sta_lat),
