@@ -61,6 +61,7 @@ Td <- ncvar_get(td2m_nc, "x2d") # dew point temperature
 step <- ncvar_get(t2m_nc, "step") #Lead times
 validTime_raw <- ncvar_get(t2m_nc, "validTime") ## ?? no idea what are those number means for date
 #might be minute offsets from a reference time but dont know reference time
+#validTime_raw
 
 #close netcdfs
 nc_close(t2m_nc)
@@ -98,9 +99,7 @@ date_lookup_df = data.frame(day_i = 1:length(date_refs), date = date_refs)
 # # dimension 1 is the grid cell locations (these may match more than one station) (Match these using the documentation - still need to figure this out)
 # # dimension 2 is the number of lead times over the 10 days (6 hours) (In the documentation)
 # # dimension 3 is the number of ensemble members (50) plus 1 high resolution run
-# # dimension 4 is the number of forcasts 365 * 2 (2 forecasts per day)
-
-#Here is basiclly what this nc data set looks like
+# # dimension 4 is the number of forecasts 365 * 2 (2 forecasts per day)
 
 ```
 #Here is basiclly what this nc data set looks like
@@ -127,7 +126,7 @@ Visual Representation:
 │        │ ... │   matrix    │    │         │
 │        │240h └─────────────┘    │ ← 41 lead times
 │        └─────────────────────────┘         │
-│                                             │
+│                                            │
 │  forecasts 2 
          ┌─────────────────────────┐         │
 │        │ (same structure)        │         │
@@ -149,7 +148,6 @@ Dimension meanings:
 - step: [0, 6, 12, ..., 240] (41 forecast hours)
 - member: 1-50 are ensemble members, 51 is control forecast
 - validTime: [timestamp1, timestamp2, ..., timestamp730] (730 forecast times)
-
 
 ## Start visualization(test example created by Kate)
 ```{r}
@@ -183,135 +181,233 @@ ggplot(example_day) +
 date_refs = data_reference_date + t2m_nc$dim$runtime$vals 
 
 date_lookup_df = data.frame(day_i = 1:length(date_refs), date = date_refs)
-
+date_lookup_df
 ```
-
 ##after test and some preliminary research,we start to import whole dataset
-##Read all nc data after understand the data structure
+##functions that help us to extract data from nc files
 ```{r}
-rm(list = ls())
-############ import ensemble forecast data
-
-#TODO: fix direct path references (complete,delete after check)
-#TODO: put your files on github (complete,delete after check)
-
-data_dir <- here("data", "ToSend-01-20-2025") # set file direction
-nc_files <- list.files(data_dir, pattern = "\\.nc$", full.names = TRUE) # find all nc file
-
-#divide them to temp and dewpoint data based on name
-temp_files <- nc_files[grep("_2t_", nc_files)]
-dewpoint_files <- nc_files[grep("_2d_", nc_files)]
-
-#function to read netcdf file based on different year
-read_year_data <- function(year, data_dir) {
-  t2m_file <- file.path(data_dir, paste0("combined_raw_2t_", year, ".nc"))
-  td2m_file <- file.path(data_dir, paste0("combined_raw_2d_", year, ".nc"))
-  #open nc file
-  t2m_nc <- nc_open(t2m_file)
-  td2m_nc <- nc_open(td2m_file)
-  #read data by different variable
-  T2 <- ncvar_get(t2m_nc, "x2t") # get temp data
-  Td <- ncvar_get(td2m_nc, "x2d") # get dew point data
-  step <- ncvar_get(t2m_nc, "step")# Lead time# How long it predict?
-  validTime <- ncvar_get(t2m_nc, "validTime")# target time of forecast
-  gridpoint <- ncvar_get(t2m_nc, "gridpoint") # gridpoint of location
-  #close nc file
-  nc_close(t2m_nc)
-  nc_close(td2m_nc)
-  #return read data in list format 
+#use example: temp_2021 <- read_data(2021, "2t")
+read_data <- function(year, var_type, data_dir = here("data", "ToSend-01-20-2025")) {
+  # Build filename
+  filename <- file.path(data_dir, paste0("combined_raw_", var_type, "_", year, ".nc"))
+  
+  # Open file
+  nc <- nc_open(filename)
+  
+  # Read main variable
+  var_name <- paste0("x", var_type)  # x2t or x2d
+  data <- ncvar_get(nc, var_name)
+  
+  # Read other information
+  step <- ncvar_get(nc, "step")
+  validTime <- ncvar_get(nc, "validTime")
+  gridpoint <- ncvar_get(nc, "gridpoint")
+  member <- if("member" %in% names(nc$dim)) ncvar_get(nc, "member") else NULL
+  
+  runtime_info <- nc$dim$runtime
+  
+  # Close file
+  nc_close(nc)
+  
+  # Return
   return(list(
-    year = year,
-    T2 = T2,
-    Td = Td,
+    data = data,
     step = step,
     validTime = validTime,
-    gridpoint = gridpoint
+    gridpoint = gridpoint,
+    member = member,
+    runtime_units = runtime_info$units,
+    runtime_vals = runtime_info$vals
   ))
 }
 
-#function to extract nc file year  
-extract_years <- function(files) {
-  years <- unique(gsub(".*_(\\d{4})\\.nc", "\\1", basename(files)))
-  return(as.numeric(years))
+# Test
+temp_2021 <- read_data(2021, "2t")  # Read combined_raw_2t_2021.nc
+dewp_2021 <- read_data(2021, "2d")  # Read combined_raw_2d_2021.nc
+temp_2021_start_time <- temp_2021$runtime_units
+temp_2021_start_time
+dewp_2021_start_time <- dewp_2021$runtime_units
+dewp_2021_start_time
+```
+###function that help us to convert readed data to tidy format
+```{r}
+#example：example_day <- tidy_formation(temp_2021, gridpoint_idx = 1, validtime_idx = 100)
+tidy_formation <- function(data, gridpoint_idx, validtime_idx) {
+  # Parse reference date from runtime_units (e.g., "days since 2021-01-31 00:00:00")
+  ref_date <- as.Date(gsub(".*since\\s+([0-9-]+).*", "\\1", data$runtime_units))
+  
+  # validtime_idx is the same as day_i in your original code
+  # It directly indexes into runtime_vals
+  forecast_date <- ref_date + days(data$runtime_vals[validtime_idx])
+  
+  # Get the data slice [gridpoint, step, member, validtime]
+  # This is equivalent to T2[loc_i, 1:41, 1:51, day_i] in your original code
+  data_slice <- data$data[gridpoint_idx, , , validtime_idx]
+  
+  # Transpose to get members as rows, steps as columns
+  df <- as.data.frame(t(data_slice))
+  
+  # Name columns by step index
+  names(df) <- paste0("Step_", 0:40)
+  
+  # Add member column
+  df$Member <- paste0("M", seq_len(nrow(df)))
+  
+  # Create lead time hours vector (0 to 240 hours in 41 steps)
+  lead_times_hours <- seq(0, 240, length.out = 41)
+  
+  # Pivot to long format and add all necessary columns
+  tidy_df <- df %>%
+    pivot_longer(
+      cols = starts_with("Step_"),
+      names_to = "Step_idx",
+      values_to = "Forecast_value"
+    ) %>%
+    mutate(
+      Step_idx = as.numeric(gsub("Step_", "", Step_idx)),
+      lead_time_hrs = lead_times_hours[Step_idx + 1],  # +1 because R is 1-indexed
+      Gridpoint_idx = gridpoint_idx,
+      ValidTime_idx = validtime_idx,
+      Gridpoint = data$gridpoint[gridpoint_idx],
+      Forecast_date = forecast_date  # This is the date from date_lookup_df
+    ) %>%
+    select(Member, lead_time_hrs, Forecast_date, Forecast_value, 
+           Gridpoint, everything())
+  
+  return(tidy_df)
 }
 
-#find all available year
-available_years <- extract_years(c(temp_files, dewpoint_files))
-available_years <- sort(unique(available_years))
 
-#use for loop to import all data to list all data
-all_data <- list()
-for (year in available_years) {
-  year_data <- read_year_data(year, data_dir)
-  if (!is.null(year_data)) {
-    all_data[[as.character(year)]] <- year_data
-  }
-}
+# Example usage and verification
+#temp_2021 <- read_data(2021, "2t")
+#temp_2021
+# 
+# # Convert specific validtime to tidy format
+example_day <- tidy_formation(temp_2021, gridpoint_idx = 1, validtime_idx = 100)
+example_day
 
-# all_data
-#   ├── "2021"
-#   │   ├── year: 2021
-#   │   ├── T2: [38, 41, 51, 730] temp
-#   │   ├── Td: [38, 41, 51, 730] dew point
-#   │   ├── step: [0, 1, 2, ..., 40]
-#   │   ├── validTime: time info
-#   │   └── gridpoint: [605, 639, 674, ...]
-#   ├── "2022"
-#   │   └── (same structure)
-#   └── ...
-
-# example: extract 2021 temp
-#T2_2021 <- all_data[["2021"]]$T2
-
+dewp_example_day <- tidy_formation(dewp_2021, gridpoint_idx = 1, validtime_idx = 100)
+dewp_example_day
 ```
 
-## create a tidy table for forecast(not completed)
+##function that we only input forecats_time and gridpoint to generate tidy forecast table
 ```{r}
-tidy_forecast <- function(raw_forecast_data, day_i, loc_i) {
-  # extract data
-  daily_forecast <- raw_forecast_data[loc_i, , , day_i] |>
-    as.data.frame()
+#example: tidy_result_2021_01_31_G605 <- tidy_table_ultimate("2021-01-31", 605)
+# Helper function to find validtime index for a given date
+
+# helper functions
+find_validtime_index <- function(data, target_date) {
+  target_date <- as.Date(target_date)
+  ref_date <- as.Date(gsub(".*since\\s+([0-9-]+).*", "\\1", data$runtime_units))
+  days_since_ref <- as.numeric(target_date - ref_date)
   
-  names(daily_forecast) <- paste0("M", 1:ncol(daily_forecast))
-  
-  daily_forecast <- daily_forecast |>
-    mutate(lead_time_hrs = seq(0, 240, length.out = nrow(daily_forecast))) |>
-    pivot_longer(cols = starts_with("M"), 
-                 names_to = "Member", 
-                 values_to = "Forecast_value")
-  
-  return(daily_forecast)
+  # Find exact match or closest
+  idx <- which(data$runtime_vals == days_since_ref)
+  if (length(idx) == 0) {
+    idx <- which.min(abs(data$runtime_vals - days_since_ref))
+  }
+  return(idx)
 }
 
-# create tidy table for all years
-create_year_tidy <- function(year_data, loc_i , day_i ) {
-  # temperature
-  temp_tidy <- tidy_forecast(year_data$T2, day_i, loc_i) |>
-    rename(Temperature = Forecast_value)
-  
-  # dew points
-  dewpoint_tidy <- tidy_forecast(year_data$Td, day_i, loc_i) |>
-    select(lead_time_hrs, Member, Dewpoint = Forecast_value)
-  
-  # combine all elements
-  combined <- temp_tidy |>
-    left_join(dewpoint_tidy, by = c("lead_time_hrs", "Member")) |>
-    mutate(
-      year = year_data$year,
-      grid_point_id = year_data$gridpoint[loc_i],
-      valid_time_hours = year_data$validTime[day_i],
-    )
-  
-  return(combined)
+find_gridpoint_index <- function(data, gridpoint_id) {
+  idx <- which(data$gridpoint == gridpoint_id)
+  if (length(idx) == 0) {
+    stop("Gridpoint ID ", gridpoint_id, " not found")
+  }
+  return(idx)
 }
 
-# test
-tidy_2021_1_1 <- create_year_tidy(all_data[["2021"]],1,1)
 
-# check results
-head(tidy_2021_1_1)
-tail(tidy_2021_1_1)
+# main function!!!!!!!!!!!!!
+#example: tidy_result_2021_08_13_G605 <- tidy_table_ultimate("2021-08-13", 605)
+tidy_table_ultimate <- function(target_date, gridpoint_id, data_dir = here("data", "ToSend-01-20-2025")) {
+  
+  # Step 1: Extract year
+  year <- year(as.Date(target_date))
+  
+  # Step 2: Read both datasets
+  temp_data <- read_data(year, "2t", data_dir)
+  dewp_data <- read_data(year, "2d", data_dir)
+  
+  # Step 3: Find validtime index for EACH dataset separately
+  vt_idx_temp <- find_validtime_index(temp_data, target_date)
+  vt_idx_dewp <- find_validtime_index(dewp_data, target_date)
+  
+  # Step 4: Find gridpoint index
+  grid_idx <- find_gridpoint_index(temp_data, gridpoint_id)
+  
+  # Step 5: Calculate forecast dates for EACH dataset
+  ref_date_temp <- as.Date(gsub(".*since\\s+([0-9-]+).*", "\\1", temp_data$runtime_units))
+  ref_date_dewp <- as.Date(gsub(".*since\\s+([0-9-]+).*", "\\1", dewp_data$runtime_units))
+  
+  # Ensure we get single values
+  forecast_date_temp <- ref_date_temp + days(temp_data$runtime_vals[vt_idx_temp[1]])
+  forecast_date_dewp <- ref_date_dewp + days(dewp_data$runtime_vals[vt_idx_dewp[1]])
+  
+  # Verify dates match (use all() for safe comparison)
+  if (!identical(forecast_date_temp, forecast_date_dewp)) {
+    warning("Temperature and dew point data have different forecast dates: ",
+            as.character(forecast_date_temp), " vs ", as.character(forecast_date_dewp))
+  }
+  
+  # Create lead times
+  lead_times_hours <- seq(0, 240, length.out = 41)
+  
+  # Initialize results
+  results <- list()
+  
+  # Extract data manually for each member and step
+  for (m in 1:51) {
+    for (s in 1:41) {
+      # Extract temperature value - use first index if multiple
+      temp_val <- tryCatch({
+        temp_data$data[grid_idx[1], s, m, vt_idx_temp[1]]
+      }, error = function(e) {
+        tryCatch({
+          temp_data$data[m, s, vt_idx_temp[1], grid_idx[1]]
+        }, error = function(e) {
+          NA
+        })
+      })
+      
+      # Extract dew point value - use first index if multiple
+      dewp_val <- tryCatch({
+        dewp_data$data[grid_idx[1], s, m, vt_idx_dewp[1]]
+      }, error = function(e) {
+        tryCatch({
+          dewp_data$data[m, s, vt_idx_dewp[1], grid_idx[1]]
+        }, error = function(e) {
+          NA
+        })
+      })
+      
+      # Ensure we have single values
+      if (length(temp_val) > 1) temp_val <- temp_val[1]
+      if (length(dewp_val) > 1) dewp_val <- dewp_val[1]
+      
+      # Add to results
+      results[[length(results) + 1]] <- data.frame(
+        Member = paste0("M", m),
+        lead_time_hrs = lead_times_hours[s],
+        Forecast_date = forecast_date_temp,
+        Temperature = as.numeric(temp_val),
+        DewPoint = as.numeric(dewp_val),
+        Temperature_C = as.numeric(temp_val) - 273.15,
+        DewPoint_C = as.numeric(dewp_val) - 273.15,
+        Gridpoint_ID = gridpoint_id,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  
+  # Combine all results
+  tidy_combined <- bind_rows(results)
+  return(tidy_combined)
+}
 
+#test
+tidy_result_2021_08_13_G605 <- tidy_table_ultimate("2021-08-13", 605)
+tidy_result_2021_08_13_G605
 ```
 
 ##import meta data to find locations(lon and lat) for gridpoints and their corresponding stations
@@ -321,12 +417,9 @@ prediction_metadata <- read.csv(here("data", "ToSend-01-20-2025", "prediction_me
 sta_gp_metadata <- read.csv(here("data", "ToSend-01-20-2025", "sta_gp_metadata.csv"))
 sta_gp_metadata <- sta_gp_metadata %>%
   select(-X)
-# find all grid points appeared in our all_data data set
-all_gridpoints <- c()
-for (year in names(all_data)) {
-  all_gridpoints <- c(all_gridpoints, all_data[[year]]$gridpoint)
-}
-unique_gridpoints <- sort(unique(all_gridpoints))
+
+# all grid points appeared in our all_data data set
+unique_gridpoints <- c(605, 639, 674, 676, 680, 715, 745, 747, 787, 818, 819, 821, 854, 857, 891, 896, 935, 965, 967, 969, 971, 1001, 1002, 1003, 1041, 1073, 1074, 1080, 1111, 1112, 1114, 1118, 1147, 1148, 1154, 1187, 1193, 1269)
 
 #match them with meta
 
@@ -379,8 +472,10 @@ sum(station_count$n_stations)
 
 # only found 43 stations in 38 grid points
 
-# In addition for some gridpoints like 819 , it has 2 relate stations with different station_id, sta_lat and sta_lon
+# In addition, for some gridpoints like 819 , it has 2 relate stations with different station_id, sta_lat and sta_lon
 ```
+################### (: Visualization starts here :) ######################
+
 
 ## find stations near cities
 ```{r}
@@ -480,7 +575,7 @@ ggsave(
 ## find stations near grid points,for some gridpoints like 819 , it has 2 relate stations but same station_id different sta_lat and sta_lon
 ```{r}
 # Create visualization
-netherlands <- ne_countries(country = "netherlands", returnclass = "sf", scale = "medium")
+#netherlands <- ne_countries(country = "netherlands", returnclass = "sf", scale = "medium")
 
 gridpoint_station_map <- ggplot() +
   #geom_sf(data = netherlands, fill = NA, color = "black", size = 0.8) +
@@ -565,6 +660,9 @@ ggsave(
 )
 
 # every station is super close to its corresponding grid points
+```
+```{r}
+#automate plot function using fixed lead time
 ```
 
 
