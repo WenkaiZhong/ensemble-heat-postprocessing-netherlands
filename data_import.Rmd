@@ -1,7 +1,7 @@
 ---
 title: "API test"
-author: "Kevin"
-date: "2025-03-19"
+author: "Wenkai Zhong"
+date: "2025-07-10"
 output: html_document
 ---
 
@@ -41,67 +41,6 @@ data/
 #2t = 2-meter temperature
 #NetCDF data type
 
-## There is an issue with how the dates are read in from the netcdf files. The order is mixed up, must look at the validtime to resolve this known issue. 
-
-## Some varification and test for our dataset (ensemble forecasts)
-
-```{r}
-#read netcdf file
-t2m_nc <- nc_open("data/ToSend-01-20-2025/combined_raw_2t_2021.nc") # temp data
-td2m_nc <- nc_open("data/ToSend-01-20-2025/combined_raw_2d_2021.nc") #dew point data
-
-#list all variables in this data set
-names(t2m_nc$var) 
-names(td2m_nc$var)
-
-#get data
-T2 <- ncvar_get(t2m_nc, "x2t")  # temp in Kelvin
-Td <- ncvar_get(td2m_nc, "x2d") # dew point temperature
-
-step <- ncvar_get(t2m_nc, "step") #Lead times
-validTime_raw <- ncvar_get(t2m_nc, "validTime") ## ?? no idea what are those number means for date
-#might be minute offsets from a reference time but dont know reference time
-#validTime_raw
-
-#close netcdfs
-nc_close(t2m_nc)
-nc_close(td2m_nc)
-
-summary(T2)
-summary(Td)
-
-# dim(T2) # result: 38 41 51 730
-# #str(t2m_nc)
-# 
-# validTime_raw
-# 
-# dim(t2m_nc)
-# dim(T2)
-# t2m_nc[[1]]
-# 
-# T2[1,1:41,1,1]
-# 
-# # From our meeting with Kiri
-# names(t2m_nc$dim)
-# t2m_nc$dim$runtime
-# table(t2m_nc$dim$runtime$vals)
-# t2m_nc$dim$step
-# 
-# # Making sense of meeting with Kir
-str_data_reference_date = t2m_nc$dim$runtime$units
-data_reference_date = as_date("2021-01-31")
-# #TODO: automate this somehow
-date_refs = data_reference_date + t2m_nc$dim$runtime$vals
-# 
-date_lookup_df = data.frame(day_i = 1:length(date_refs), date = date_refs)
-
-
-# # dimension 1 is the grid cell locations (these may match more than one station) (Match these using the documentation - still need to figure this out)
-# # dimension 2 is the number of lead times over the 10 days (6 hours) (In the documentation)
-# # dimension 3 is the number of ensemble members (50) plus 1 high resolution run
-# # dimension 4 is the number of forecasts 365 * 2 (2 forecasts per day)
-
-```
 #Here is basiclly what this nc data set looks like
 combined_raw_2t_2021.nc (Temperature data)
 combined_raw_2d_2021.nc (Dewpoint data)
@@ -149,43 +88,10 @@ Dimension meanings:
 - member: 1-50 are ensemble members, 51 is control forecast
 - validTime: [timestamp1, timestamp2, ..., timestamp730] (730 forecast times)
 
-## Start visualization(test example created by Kate)
-```{r}
-lead_times_hours = seq(0, 240, length.out = 41)#
-
-ggplot() + 
-  geom_line(aes(x = lead_times_hours, T2[1,1:41,1,1])) + 
-  geom_line(aes(x = lead_times_hours, T2[1,1:41,2,1]), col = "blue") +
-  geom_line(aes(x = lead_times_hours, T2[1,1:41,3,1]), col = "red") 
-
-raw_forecast_data = T2; loc_i = 1; day_i = 1
-tidy_forecast <- function(raw_forecast_data, day_i, loc_i){
-  daily_forecast = raw_forecast_data[loc_i, 1:41, 1:51, day_i] |>
-    as.data.frame()
-  names(daily_forecast) = paste0("M", 1:ncol(daily_forecast))
-  daily_forecast = daily_forecast |>
-    mutate(lead_time_hrs = seq(0, 240, length.out = 41)) |>
-    pivot_longer(cols = 1:50, names_to = "Member", values_to = "Forecast_value")
-  #TODO: fix this so columns aren't hard coded
-  return(daily_forecast)
-}
-
-example_day = tidy_forecast(T2, 1, 1)
-example_day
-
-ggplot(example_day) + 
-  geom_line(aes(x = lead_time_hrs, y = Forecast_value, group = Member), alpha = 0.6, col = "gray")
-
-
-#TODO: automate this somehow
-date_refs = data_reference_date + t2m_nc$dim$runtime$vals 
-
-date_lookup_df = data.frame(day_i = 1:length(date_refs), date = date_refs)
-date_lookup_df
-```
 ##after test and some preliminary research,we start to import whole dataset
 ##functions that help us to extract data from nc files
 ```{r}
+rm(list = ls())
 #use example: temp_2021 <- read_data(2021, "2t")
 read_data <- function(year, var_type, data_dir = here("data", "ToSend-01-20-2025")) {
   # Build filename
@@ -222,13 +128,14 @@ read_data <- function(year, var_type, data_dir = here("data", "ToSend-01-20-2025
 }
 
 # Test
-temp_2021 <- read_data(2021, "2t")  # Read combined_raw_2t_2021.nc
-dewp_2021 <- read_data(2021, "2d")  # Read combined_raw_2d_2021.nc
-temp_2021_start_time <- temp_2021$runtime_units
-temp_2021_start_time
-dewp_2021_start_time <- dewp_2021$runtime_units
-dewp_2021_start_time
+# temp_2021 <- read_data(2021, "2t")  # Read combined_raw_2t_2021.nc
+# dewp_2021 <- read_data(2021, "2d")  # Read combined_raw_2d_2021.nc
+# temp_2021_start_time <- temp_2021$runtime_units
+# temp_2021_start_time
+# dewp_2021_start_time <- dewp_2021$runtime_units
+# dewp_2021_start_time
 ```
+
 ###function that help us to convert readed data to tidy format
 ```{r}
 #example：example_day <- tidy_formation(temp_2021, gridpoint_idx = 1, validtime_idx = 100)
@@ -283,11 +190,11 @@ tidy_formation <- function(data, gridpoint_idx, validtime_idx) {
 #temp_2021
 # 
 # # Convert specific validtime to tidy format
-example_day <- tidy_formation(temp_2021, gridpoint_idx = 1, validtime_idx = 100)
-example_day
-
-dewp_example_day <- tidy_formation(dewp_2021, gridpoint_idx = 1, validtime_idx = 100)
-dewp_example_day
+# example_day <- tidy_formation(temp_2021, gridpoint_idx = 1, validtime_idx = 100)
+# example_day
+# 
+# dewp_example_day <- tidy_formation(dewp_2021, gridpoint_idx = 1, validtime_idx = 100)
+# dewp_example_day
 ```
 
 ##function that we only input forecats_time and gridpoint to generate tidy forecast table
@@ -662,7 +569,167 @@ ggsave(
 # every station is super close to its corresponding grid points
 ```
 ```{r}
-#automate plot function using fixed lead time
+#automate plot function using gridpoint_id date and members to plot
+auto_forecast_plot <- function(date, grid_point, members = 1:51, 
+                              variable = "Temperature_C",
+                              data_dir = here("data", "ToSend-01-20-2025")) {
+  
+  # Get the tidy data
+  tidy_data <- tidy_table_ultimate(date, grid_point, data_dir)
+  
+  # Filter for selected members
+  member_names <- paste0("M", members)
+  plot_data <- tidy_data %>%
+    filter(Member %in% member_names)
+  
+  # Create base plot
+  p <- ggplot(plot_data, aes(x = lead_time_hrs, y = .data[[variable]], group = Member))
+  
+  # Check number of members
+  n_members <- length(members)
+  
+  if (n_members <= 10) {
+    # Use different colors for each member
+    colors <- c("red", "blue", "green", "purple", "orange", 
+                "brown", "pink", "yellow", "cyan", "magenta")
+    
+    p <- p + geom_line(aes(color = Member), size = 1.2, alpha = 0.8) +
+         scale_color_manual(values = colors[1:n_members])
+  } else {
+    # Use gray for all lines when more than 10 members
+    p <- p + geom_line(alpha = 0.6, color = "gray")
+  }
+  
+  # Add labels and theme
+  p <- p +
+    labs(
+      title = paste("Forecast for", date, "at Gridpoint", grid_point),
+      subtitle = paste(n_members, "ensemble members"),
+      x = "Lead Time (hours)",
+      y = ifelse(variable == "Temperature_C", "Temperature (°C)", 
+                 ifelse(variable == "DewPoint_C", "Dew Point (°C)", variable))
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12),
+      legend.position = if(n_members <= 10) "right" else "none"
+    ) +
+    scale_x_continuous(breaks = seq(0, 240, 24)) +
+    coord_cartesian(xlim = c(0, 240))
+  
+  return(p)
+}
+
+p1 <- auto_forecast_plot("2021-01-31", 605, members = 1:51)
+print(p1)
+```
+```{r}
+auto_forecast_plot_with_pdf <- function(date, grid_point, members = 1:51, 
+                                       variable = "Temperature_C",
+                                       pdf_times = c(24, 48, 120, 240),  # Hours to show PDFs
+                                       data_dir = here("data", "ToSend-01-20-2025")) {
+  
+  # Get the tidy data
+  tidy_data <- tidy_table_ultimate(date, grid_point, data_dir)
+  
+  # Filter for selected members
+  member_names <- paste0("M", members)
+  plot_data <- tidy_data %>%
+    filter(Member %in% member_names)
+  
+  # Check number of members
+  n_members <- length(members)
+  
+  # Main forecast plot
+  p_main <- ggplot(plot_data, aes(x = lead_time_hrs, y = .data[[variable]], group = Member))
+  
+  if (n_members <= 10) {
+    colors <- c("red", "blue", "green", "purple", "orange", 
+                "brown", "pink", "yellow", "cyan", "magenta")
+    p_main <- p_main + 
+      geom_line(aes(color = Member), size = 1.2, alpha = 0.8) +
+      scale_color_manual(values = colors[1:n_members])
+  } else {
+    p_main <- p_main + 
+      geom_line(alpha = 0.6, color = "gray")
+  }
+  
+  # Add vertical lines at PDF times
+  p_main <- p_main +
+    geom_vline(xintercept = pdf_times, linetype = "dashed", alpha = 0.5) +
+    labs(
+      title = paste("Forecast for", date, "at Gridpoint", grid_point),
+      subtitle = paste(n_members, "ensemble members"),
+      x = "Lead Time (hours)",
+      y = ifelse(variable == "Temperature_C", "Temperature (°C)", 
+                 ifelse(variable == "DewPoint_C", "Dew Point (°C)", variable))
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12),
+      legend.position = if(n_members <= 10) "bottom" else "none"
+    ) +
+    scale_x_continuous(breaks = seq(0, 240, 24)) +
+    coord_cartesian(xlim = c(0, 240))
+  
+  # Create PDF plots
+  pdf_plots <- list()
+  
+  for (i in seq_along(pdf_times)) {
+    time_hr <- pdf_times[i]
+    
+    # Get data for this specific time
+    pdf_data <- plot_data %>%
+      filter(abs(lead_time_hrs - time_hr) < 0.1)  # Account for floating point
+    
+    if (nrow(pdf_data) > 0) {
+      # Create density plot
+      p_pdf <- ggplot(pdf_data, aes(x = .data[[variable]])) +
+        geom_density(fill = "lightblue", alpha = 0.7, color = "darkblue") +
+        geom_rug(alpha = 0.5) +
+        labs(
+          title = paste0(time_hr, "h"),
+          x = "",
+          y = "Density"
+        ) +
+        theme_minimal() +
+        theme(
+          plot.title = element_text(size = 10, hjust = 0.5),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.grid.major.y = element_blank(),
+          panel.grid.minor.y = element_blank()
+        ) +
+        coord_flip()  # Rotate to vertical
+      
+      # Add mean line
+      mean_val <- mean(pdf_data[[variable]], na.rm = TRUE)
+      p_pdf <- p_pdf + 
+        geom_vline(xintercept = mean_val, color = "red", linetype = "dashed")
+      
+      pdf_plots[[i]] <- p_pdf
+    }
+  }
+  
+  # Combine plots using patchwork
+  if (length(pdf_plots) > 0) {
+    # Combine PDF plots vertically
+    pdf_combined <- wrap_plots(pdf_plots, ncol = 1)
+    
+    # Combine main plot with PDFs
+    final_plot <- p_main + pdf_combined + 
+      plot_layout(widths = c(3, 1))
+  } else {
+    final_plot <- p_main
+  }
+  
+  return(final_plot)
+}
+
+p1 <- auto_forecast_plot_with_pdf("2021-01-31", 605, members = 1:51)
+print(p1)
 ```
 
 

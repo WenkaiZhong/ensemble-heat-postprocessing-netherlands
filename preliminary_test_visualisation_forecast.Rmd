@@ -1,0 +1,185 @@
+---
+title: "preliminary_test_visualisation_forecast"
+author: "Wenkai_Zhong"
+date: "2025-07-10"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#change R language to english
+Sys.setlocale("LC_TIME", "English")
+rm(list = ls())
+
+library(R.utils)
+library(ggplot2)
+library(patchwork)
+library(lubridate)
+library(here)
+library(ncdf4)
+library(ggrepel)
+library(tidyverse)
+library(plotly)
+#library(sf)
+#library(rnaturalearth)
+
+# creat .gitignore file to avoid upload data(too large)
+cat("# Ignore all data files
+data/
+*.RData
+*.Rhistory
+.Rproj.user/
+.RDataTmp*
+", file = ".gitignore")
+```
+
+## Reading in the netcdf
+
+# Model: These are the files starting with "combined_raw_". It contains ECMWF-IFS ensemble forecasts (50+1 members) over the Netherlands at 6-h time resolution.
+#check combined_raw_2d/2t_year data
+#2d = dew point temperature
+#2t = 2-meter temperature
+#NetCDF data type
+
+## There is an issue with how the dates are read in from the netcdf files. The order is mixed up, must look at the validtime to resolve this known issue. 
+
+## Some varification and test for our dataset (ensemble forecasts)
+
+```{r}
+#read netcdf file
+t2m_nc <- nc_open("data/ToSend-01-20-2025/combined_raw_2t_2021.nc") # temp data
+td2m_nc <- nc_open("data/ToSend-01-20-2025/combined_raw_2d_2021.nc") #dew point data
+
+#list all variables in this data set
+names(t2m_nc$var) 
+names(td2m_nc$var)
+
+#get data
+T2 <- ncvar_get(t2m_nc, "x2t")  # temp in Kelvin
+Td <- ncvar_get(td2m_nc, "x2d") # dew point temperature
+
+step <- ncvar_get(t2m_nc, "step") #Lead times
+validTime_raw <- ncvar_get(t2m_nc, "validTime") ## ?? no idea what are those number means for date
+#might be minute offsets from a reference time but dont know reference time
+#validTime_raw
+
+#close netcdfs
+nc_close(t2m_nc)
+nc_close(td2m_nc)
+
+summary(T2)
+summary(Td)
+
+# dim(T2) # result: 38 41 51 730
+# #str(t2m_nc)
+# 
+# validTime_raw
+# 
+# dim(t2m_nc)
+# dim(T2)
+# t2m_nc[[1]]
+# 
+# T2[1,1:41,1,1]
+# 
+# # From our meeting with Kiri
+# names(t2m_nc$dim)
+# t2m_nc$dim$runtime
+# table(t2m_nc$dim$runtime$vals)
+# t2m_nc$dim$step
+# 
+# # Making sense of meeting with Kir
+str_data_reference_date = t2m_nc$dim$runtime$units
+data_reference_date = as_date("2021-01-31")
+# #TODO: automate this somehow
+date_refs = data_reference_date + t2m_nc$dim$runtime$vals
+# 
+date_lookup_df = data.frame(day_i = 1:length(date_refs), date = date_refs)
+
+
+# # dimension 1 is the grid cell locations (these may match more than one station) (Match these using the documentation - still need to figure this out)
+# # dimension 2 is the number of lead times over the 10 days (6 hours) (In the documentation)
+# # dimension 3 is the number of ensemble members (50) plus 1 high resolution run
+# # dimension 4 is the number of forecasts 365 * 2 (2 forecasts per day)
+
+```
+#Here is basiclly what this nc data set looks like
+combined_raw_2t_2021.nc (Temperature data)
+combined_raw_2d_2021.nc (Dewpoint data)
+
+Data Structure (4D array):
+[location, lead_time, ensemble_member, forecasts number(two forecasts daily)]
+[38,       41,        51,              730]
+
+Visual Representation:
+┌─────────────────────────────────────────────┐
+│              Year 2021 Data                 │
+├─────────────────────────────────────────────┤
+│  Forecast Axis (730 forecasts)                        │
+│  ↓                                          │
+│  forecasts 1 
+         ┌─────────────────────────┐         │
+│        │ Loc1  Loc2 ... Loc38   │ ← 38 locations
+│        ├─────────────────────────┤         │
+│        │ 0h  ┌─────────────┐    │         │
+│        │ 6h  │ M1 M2...M51 │    │ ← 51 ensemble members
+│        │ 12h │ Temp values │    │         │
+│        │ ... │   matrix    │    │         │
+│        │240h └─────────────┘    │ ← 41 lead times
+│        └─────────────────────────┘         │
+│                                            │
+│  forecasts 2 
+         ┌─────────────────────────┐         │
+│        │ (same structure)        │         │
+│        └─────────────────────────┘         │
+│  ...                                        │
+│                                             │
+│  forecasts 730 
+           ┌───────────────────────┐         │
+│          │ (same structure)      │         │
+│          └───────────────────────┘         │
+└─────────────────────────────────────────────┘
+
+Example indexing:
+all_data[["2021"]]$T2[1, 1, 1, 1] = Location 1, Hour 0, Member 1, Forecast 1
+all_data[["2021"]]$T2[38, 41, 51, 730] = Location 38, Hour 240, Member 51, Forecast 730
+
+Dimension meanings:
+- gridpoint: [605, 639, 674, ...] (38 station IDs)
+- step: [0, 6, 12, ..., 240] (41 forecast hours)
+- member: 1-50 are ensemble members, 51 is control forecast
+- validTime: [timestamp1, timestamp2, ..., timestamp730] (730 forecast times)
+
+## Start visualization(test example created by Kate)
+```{r}
+lead_times_hours = seq(0, 240, length.out = 41)#
+
+ggplot() + 
+  geom_line(aes(x = lead_times_hours, T2[1,1:41,1,1])) + 
+  geom_line(aes(x = lead_times_hours, T2[1,1:41,2,1]), col = "blue") +
+  geom_line(aes(x = lead_times_hours, T2[1,1:41,3,1]), col = "red") 
+
+raw_forecast_data = T2; loc_i = 1; day_i = 1
+tidy_forecast <- function(raw_forecast_data, day_i, loc_i){
+  daily_forecast = raw_forecast_data[loc_i, 1:41, 1:51, day_i] |>
+    as.data.frame()
+  names(daily_forecast) = paste0("M", 1:ncol(daily_forecast))
+  daily_forecast = daily_forecast |>
+    mutate(lead_time_hrs = seq(0, 240, length.out = 41)) |>
+    pivot_longer(cols = 1:50, names_to = "Member", values_to = "Forecast_value")
+  #TODO: fix this so columns aren't hard coded
+  return(daily_forecast)
+}
+
+example_day = tidy_forecast(T2, 1, 1)
+example_day
+
+ggplot(example_day) + 
+  geom_line(aes(x = lead_time_hrs, y = Forecast_value, group = Member), alpha = 0.6, col = "gray")
+
+
+#TODO: automate this somehow
+date_refs = data_reference_date + t2m_nc$dim$runtime$vals 
+
+date_lookup_df = data.frame(day_i = 1:length(date_refs), date = date_refs)
+date_lookup_df
+```
