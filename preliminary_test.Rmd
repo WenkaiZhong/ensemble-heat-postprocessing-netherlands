@@ -183,3 +183,104 @@ date_refs = data_reference_date + t2m_nc$dim$runtime$vals
 date_lookup_df = data.frame(day_i = 1:length(date_refs), date = date_refs)
 date_lookup_df
 ```
+
+#### test observation data
+
+```{r}
+rm(list = ls())
+# Step 1: Examine the file structure
+library(tidyverse)
+library(data.table)
+
+# First, let's look at the raw file to understand its structure
+raw_lines <- readLines("data/ToSend-01-20-2025/kis_tot_202106.gz", n = 30)
+print("First 30 lines of the file:")
+print(raw_lines)
+
+
+con <- gzfile("data/ToSend-01-20-2025/kis_tot_202106.gz", "r")
+
+# Skip to line 192119 (to start reading from 192120)
+invisible(readLines(con, n = 192119))
+
+# Read lines 192120-192130
+lines_to_check <- readLines(con, n = 11)
+close(con)
+
+# Display the lines
+for(i in 1:length(lines_to_check)) {
+  cat(sprintf("Line %d: %s\n", 192119 + i, lines_to_check[i]))
+}
+```
+```{r}
+kis_tot_202106 <- read_fwf(
+  "data/ToSend-01-20-2025/kis_tot_202106.gz",
+  skip = 22,
+  col_positions = fwf_positions(
+    start = c(1,    # DTG
+              22,   # LOCATION
+              36,   # NAME
+              84,   # LATITUDE
+              105,  # LONGITUDE
+              125,  # ALTITUDE
+              145,  # U_BOOL_10
+              165,  # T_DRYB_10
+              185,  # TN_10CM_PAST_6H_10
+              205,  # T_DEWP_10 (adjusted from 206)
+              225,  # T_DEWP_SEA_10 (adjusted from 226)
+              245,  # T_DRYB_SEA_10 (adjusted from 246)
+              265,  # TN_DRYB_10 (adjusted from 266)
+              285,  # T_WETB_10 (adjusted from 286)
+              305,  # TX_DRYB_10 (adjusted from 306)
+              325,  # U_10 (adjusted from 326)
+              345), # U_SEA_10 (adjusted from 346)
+    end = c(20,   # DTG
+            34,   # LOCATION
+            83,   # NAME
+            103,  # LATITUDE
+            123,  # LONGITUDE
+            143,  # ALTITUDE
+            163,  # U_BOOL_10
+            183,  # T_DRYB_10
+            203,  # TN_10CM_PAST_6H_10 (adjusted from 204)
+            223,  # T_DEWP_10 (adjusted from 224)
+            243,  # T_DEWP_SEA_10 (adjusted from 244)
+            263,  # T_DRYB_SEA_10 (adjusted from 264)
+            283,  # TN_DRYB_10 (adjusted from 284)
+            303,  # T_WETB_10 (adjusted from 304)
+            323,  # TX_DRYB_10 (adjusted from 324)
+            343,  # U_10 (adjusted from 344)
+            NA),  # U_SEA_10 (end of line)
+    col_names = c("DTG", "LOCATION", "NAME", "LATITUDE", "LONGITUDE", "ALTITUDE", 
+                  "U_BOOL_10", "T_DRYB_10", "TN_10CM_PAST_6H_10", "T_DEWP_10", 
+                  "T_DEWP_SEA_10", "T_DRYB_SEA_10", "TN_DRYB_10", "T_WETB_10", 
+                  "TX_DRYB_10", "U_10", "U_SEA_10")
+  ),
+  na = c("", "NA", "-999", "-999.0"),
+  col_types = cols(
+    DTG = col_datetime(format = "%Y-%m-%d %H:%M:%S"),
+    LATITUDE = col_double(),
+    LONGITUDE = col_double(),
+    ALTITUDE = col_double(),
+    U_BOOL_10 = col_integer(),
+    T_DRYB_10 = col_double(),
+    TN_10CM_PAST_6H_10 = col_double(),
+    T_DEWP_10 = col_double(),
+    T_DEWP_SEA_10 = col_double(),
+    T_DRYB_SEA_10 = col_double(),
+    TN_DRYB_10 = col_double(),
+    T_WETB_10 = col_double(),
+    TX_DRYB_10 = col_double(),
+    U_10 = col_double(),
+    U_SEA_10 = col_double(),
+    .default = col_character()
+  ),
+  trim_ws = TRUE
+)
+
+
+kis_tot_202106
+
+
+```
+

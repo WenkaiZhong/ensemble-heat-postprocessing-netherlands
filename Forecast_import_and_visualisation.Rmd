@@ -129,7 +129,7 @@ read_data <- function(year, var_type, data_dir = here("data", "ToSend-01-20-2025
 
 # Test
 # temp_2021 <- read_data(2021, "2t")  # Read combined_raw_2t_2021.nc
-# dewp_2021 <- read_data(2021, "2d")  # Read combined_raw_2d_2021.nc
+dewp_2021 <- read_data(2021, "2d")  # Read combined_raw_2d_2021.nc
 # temp_2021_start_time <- temp_2021$runtime_units
 # temp_2021_start_time
 # dewp_2021_start_time <- dewp_2021$runtime_units
@@ -186,15 +186,9 @@ tidy_formation <- function(data, gridpoint_idx, validtime_idx) {
 
 
 # Example usage and verification
-#temp_2021 <- read_data(2021, "2t")
-#temp_2021
-# 
 # # Convert specific validtime to tidy format
-# example_day <- tidy_formation(temp_2021, gridpoint_idx = 1, validtime_idx = 100)
-# example_day
-# 
-# dewp_example_day <- tidy_formation(dewp_2021, gridpoint_idx = 1, validtime_idx = 100)
-# dewp_example_day
+dewp_example_day <- tidy_formation(dewp_2021, gridpoint_idx = 1, validtime_idx = 100)
+dewp_example_day
 ```
 
 ##function that we only input forecats_time and gridpoint to generate tidy forecast table
@@ -381,6 +375,40 @@ sum(station_count$n_stations)
 
 # In addition, for some gridpoints like 819 , it has 2 relate stations with different station_id, sta_lat and sta_lon
 ```
+
+```{r}
+tidy_forecast_with_station_grid_location <- function(target_date, gridpoint_id, 
+                                      data_dir = here("data", "ToSend-01-20-2025")) {
+  # Get forecast data
+  forecast_data <- tidy_table_ultimate(target_date, gridpoint_id, data_dir)
+  
+  # Add station information
+  forecast_with_station <- forecast_data %>%
+    left_join(
+      gridpoint_station_table %>%
+        select(gridpoint, sta_id, sta_lat, sta_lon, dist, is_coast, 
+               gp_lat, gp_lon, clc_dist0),
+      by = c("Gridpoint_ID" = "gridpoint")
+    ) %>%
+    # Optionally rename columns for clarity
+    rename(
+      station_id = sta_id,
+      station_lat = sta_lat,
+      station_lon = sta_lon,
+      gridpoint_to_station_dist = dist,
+      gridpoint_lat = gp_lat,
+      gridpoint_lon = gp_lon
+    )
+  
+  return(forecast_with_station)
+}
+
+tidy_result_2021_08_13_G605 <- tidy_forecast_with_station_grid_location("2021-08-13", 605)
+tidy_result_2021_08_13_G605
+```
+
+
+
 ################### (: Visualization starts here :) ######################
 
 
@@ -728,41 +756,16 @@ auto_forecast_plot_with_pdf <- function(date, grid_point, members = 1:51,
   return(final_plot)
 }
 
-p1 <- auto_forecast_plot_with_pdf("2021-01-31", 605, members = 1:51)
+p1 <- auto_forecast_plot_with_pdf("2021-01-31", 605, members = 1:50)
 print(p1)
 ```
 
 
-
-#Write code so we can visualise a forecast on a given day (think spaghetti type plot)
-```{r}
-library(ncdf4)
-library(dplyr)
-library(tidyr)
-library(ggplot2)
-```
-
 #These are the files starting with "kis". It contains 10-min observations at stations between 2021 and 2024 following the link I sent you. You would have to subset it to match the time resolution of the forecasts, and combine the different years and months together.
 #Source: https://dataplatform.knmi.nl/dataset/vochtigheid-en-temperatuur-1-0
-```{r}
-library(readr)
-library(dplyr)
-library(ggplot2)
-library(lubridate)
 
+###here is a function that read the observation of a sepcific date
 
-readLines("data/ToSend-01-20-2025/kis_tot_202106.gz", n = 25)
-
-kis_tot_202106 <- read_table("data/ToSend-01-20-2025/kis_tot_202106.gz", skip = 21)
-
-head(kis_tot_202106)
-tail(kis_tot_202106)
-
-summary(kis_tot_202106)
-#U_SEA_10 and x19 all NA
-#some vaiables like U_10,TX_DRYB_10 miss too many records
-#T_WETB_10, TX_DRYB_10, U_10 show maximums of 100, 99, or even 114.3—values outside any physical range
-```
 
 
 
