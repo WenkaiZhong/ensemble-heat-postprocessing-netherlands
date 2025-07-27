@@ -16,48 +16,41 @@ library(ncdf4)
 
 ```
 
-#import data
+#import data function
 ```{r}
-#import official stations' info
-metadata <- read.csv(here("data", "ToSend-01-20-2025", "prediction_meta.csv"))
-wow_dir <- here("data/2021")
-wow_files <- list.files(wow_dir, pattern = "WOW_NL_2021.*\\.csv$", full.names = TRUE)
-
-#preview the first file
-sample_file <- read.csv(wow_files[1], sep = ";", stringsAsFactors = FALSE)
-cat("Sample data dimensions:", dim(sample_file), "\n")
-
-# WOW data column name: rowId;Id;SiteId;CreatedDateTime;...;Latitude;Longitude;...
-all_wow_data <- list()
-empty_files <- c()  # 初始化空文件列表
-
-for(i in 1:length(wow_files)) {
-  if(i %% 100 == 0) cat("Reading", i, "/", length(wow_files), "\n")
-  
-  # read data split by ;
-  data <- read.csv(wow_files[i], sep = ";", stringsAsFactors = FALSE)
-  
-  #add file date
-  if(nrow(data) > 0) {
-    # add date when file not 0
-    date_str <- gsub(".*WOW_NL_(\\d{8}).*", "\\1", basename(wow_files[i]))
-    data$file_date <- date_str
-    all_wow_data[[length(all_wow_data) + 1]] <- data
-  } else {
-    # record empty file
-    empty_files <- c(empty_files, basename(wow_files[i]))
-  }
+import_WOW_day <- function(date_string) {
+ # Parse date
+ parts <- strsplit(date_string, "_")[[1]]
+ year <- parts[1]
+ date_ymd <- paste0(parts[1], parts[2], parts[3])
+ 
+ # Set path and format based on year
+ if (year == "2021") {
+   folder <- here("data", paste0("WOW_", year))
+   files <- list.files(folder, pattern = paste0("WOW_NL_", date_ymd, "*.csv"), full.names = TRUE)
+   
+   # Read and merge CSV files
+   all_data <- lapply(files, function(f) read.csv2(f, stringsAsFactors = FALSE))
+   
+ } else if (year %in% c("2022", "2023")) {
+   library(jsonlite)
+   folder <- here("data", paste0("WOW_", year), year)
+   files <- list.files(folder, pattern = paste0("WOW_NL_", date_ymd, "*.json"), full.names = TRUE)
+   
+   # Read and merge JSON files
+   all_data <- lapply(files, function(f) fromJSON(f)$Object)
+ }
+ 
+ # Combine all files
+ if (length(all_data) > 0) {
+   return(do.call(rbind, all_data))
+ } else {
+   return(NULL)
+ }
 }
 
-cat("\nReading complete!\n")
-cat("- Valid files:", length(all_wow_data), "\n")
-cat("- Empty files:", length(empty_files), "\n")
-
-# merge all
-cat("\nMerging all data...\n")
-combined_wow_data <- do.call(rbind, all_wow_data)
-
-
-length(unique(combined_wow_data$SiteId))
+# Usage
+data_20210102 <- import_WOW_day("2021_01_02")
+data_20220102 <- import_WOW_day("2022_01_02")
 ```
 

@@ -4,13 +4,18 @@ author: "Wenkai_Zhong"
 date: "2025-07-16"
 output: html_document
 ---
+#These are the files starting with "kis". It contains 10-min observations at stations between 2021 and 2024 following the link I sent you. You would have to subset it to match the time resolution of the forecasts, and combine the different years and months together.
+#Source: https://dataplatform.knmi.nl/dataset/vochtigheid-en-temperatuur-1-0
 
 ```{r}
+#rm(list = ls())
 library(readr)
 library(dplyr)
 library(lubridate)
+library(ggplot2)
 ```
 
+#function to import official station data
 ```{r}
 import_knmi_data <- function(date_str, 
                             data_path = "data/ToSend-01-20-2025/", 
@@ -114,9 +119,17 @@ import_knmi_data <- function(date_str,
   return(data)
 }
 
-data <- import_knmi_data("2021-07-13")
+data <- import_knmi_data("2021-08-13")
+
+location_table <- unique(data[, c("LOCATION", "NAME", "LATITUDE", "LONGITUDE","ALTITUDE")])
+
+location_table
 ```
 
+#function to find specific station average data in a given station
+```{r}
+
+```
 
 #some visualisation tests
 ```{r}

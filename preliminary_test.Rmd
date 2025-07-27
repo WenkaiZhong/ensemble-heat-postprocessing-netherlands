@@ -20,9 +20,11 @@ library(ncdf4)
 library(ggrepel)
 library(tidyverse)
 library(plotly)
+
+library(jsonlite)
 #library(sf)
 #library(rnaturalearth)
-
+#install.packages("jsonlite")
 # creat .gitignore file to avoid upload data(too large)
 cat("# Ignore all data files
 data/
@@ -201,7 +203,7 @@ print(raw_lines)
 con <- gzfile("data/ToSend-01-20-2025/kis_tot_202106.gz", "r")
 
 # Skip to line 192119 (to start reading from 192120)
-invisible(readLines(con, n = 192119))
+#invisible(readLines(con, n = 192119))
 
 # Read lines 192120-192130
 lines_to_check <- readLines(con, n = 11)
@@ -283,4 +285,21 @@ kis_tot_202106
 
 
 ```
+
+
+################ WOW  data test############
+
+```{r}
+test_wow_2021 <- read.csv(
+  here("data/WOW_2021/WOW_NL_2021010100.csv"),
+  sep = ";",           # Semicolon as field separator
+  header = TRUE,       # First row contains column names
+  stringsAsFactors = FALSE  # Keep strings as character type
+)
+
+test_wow_2022 <- fromJSON(here("data/WOW_2022/2022/WOW_NL_2022010100.json"))
+test_wow_2022 <- test_wow_2022$Object
+```
+
+
 

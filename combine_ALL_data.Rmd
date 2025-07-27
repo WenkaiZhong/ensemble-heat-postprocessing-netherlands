@@ -1,0 +1,89 @@
+---
+title: "combine_forecast_obs_WOW"
+author: "Wenkai_Zhong"
+date: "2025-07-25"
+output: html_document
+---
+
+############################### before run this file u should run three individual data import files first (forecast,obs,wow)#######################################
+```{r}
+# Set working directory if needed
+# setwd(here())
+```
+
+#combine forecast with obs
+```{r}
+combine_forecast_obs <- function(date_str, 
+                                gridpoint_id, 
+                                var_name,
+                                lead_time_hours = NULL,
+                                aggregate_obs = "hourly",
+                                include_metadata = TRUE) {
+  
+  forecast_data = tidy_forecast_with_station_grid_location(date_str, gridpoint_id)
+  
+  obs_data = import_knmi_data(date_str)
+  
+  # find observation from closest knmi station near gridpoint
+  station_id = unique(forecast_data$station_id)
+  
+  # check station_id
+  if(is.na(station_id) || length(station_id) == 0) {
+    warning("No station_id found for this gridpoint")
+    return(NA)
+  }
+  
+  pattern <- paste0("^", station_id, "_")
+  matching_locations <- unique(grep(pattern, obs_data$LOCATION, value = TRUE))
+  
+  obs_filtered <- obs_data %>%
+    filter(grepl(pattern, LOCATION))
+  
+  # return average of required variable
+  #return(obs_filtered)
+  return(mean(obs_filtered[[var_name]], na.rm = TRUE))
+}
+
+# test
+test1 = combine_forecast_obs("2021-08-13", 605, "T_DRYB_10")
+test1
+```
+
+#Combined visualisation funtion
+```{r}
+forecast_add_obs_line <- function(date_str, gridpoint_id, variable = "Temperature_C") {
+  
+  p <- auto_forecast_plot(date_str, gridpoint_id, 1:51)
+  # variable conversion
+  var_mapping <- list(
+    "Temperature_C" = "T_DRYB_10",
+    "DewPoint_C" = "T_DEWP_10"
+  )
+  
+
+  obs_var_name <- var_mapping[[variable]]
+  obs_value <- combine_forecast_obs(date_str, gridpoint_id, obs_var_name)
+  
+  # add observation line on the original plot
+  p_with_obs <- p + 
+    geom_hline(yintercept = obs_value, 
+               color = "red", 
+               linetype = "dashed", 
+               size = 0.5, 
+               alpha = 0.8) +
+    annotate("text", 
+             x = 200,  
+             y = obs_value, 
+             label = paste("Obs avg:", round(obs_value, 1)), 
+             vjust = -0.5,
+             color = "red",
+             fontface = "bold",
+             size = 3)
+  
+  return(p_with_obs)
+}
+
+p <- forecast_add_obs_line("2022-08-13", 605)
+p
+```
+
