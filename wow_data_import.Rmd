@@ -16,11 +16,11 @@ library(ncdf4)
 
 ```
 
-#import data function
+#import data function only import
 ```{r}
 import_WOW_day <- function(date_string) {
  # Parse date
- parts <- strsplit(date_string, "_")[[1]]
+ parts <- strsplit(date_string, "-")[[1]]
  year <- parts[1]
  date_ymd <- paste0(parts[1], parts[2], parts[3])
  
@@ -50,7 +50,12 @@ import_WOW_day <- function(date_string) {
 }
 
 # Usage
-data_20210102 <- import_WOW_day("2021_01_02")
-data_20220102 <- import_WOW_day("2022_01_02")
+data_20210102 <- import_WOW_day("2021-01-02")
+data_20220102 <- import_WOW_day("2022-01-02")
+```
+
+#import data for a month
+```{r}
+
 ```
 

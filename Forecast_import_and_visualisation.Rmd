@@ -457,10 +457,6 @@ tidy_result_2021_08_13_G605 <- tidy_forecast_with_station_grid_location("2021-08
 tidy_result_2021_08_13_G605
 ```
 
-```{r}
-
-```
-
 
 
 ################### ( Visualization starts here :) ######################
@@ -763,7 +759,7 @@ auto_forecast_plot_with_pdf_separate <- function(date, grid_point, members = 1:5
 
 # Usage:
 # Single time with grid PDFs below
-p2 <- auto_forecast_plot_with_pdf_separate("2021-01-31", 605, members = 1:50, forecast_hour = 12)#12 OR 0
+p2 <- auto_forecast_plot_with_pdf_separate("2021-01-31", 605, members = 1:50, forecast_hour = 12)#12 OR
 
 p2
 ```

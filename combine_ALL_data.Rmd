@@ -13,47 +13,90 @@ output: html_document
 
 #combine forecast with obs
 ```{r}
-combine_forecast_obs <- function(date_str, 
-                                gridpoint_id, 
-                                var_name,
-                                lead_time_hours = NULL,
-                                aggregate_obs = "hourly",
-                                include_metadata = TRUE) {
-  
-  forecast_data = tidy_forecast_with_station_grid_location(date_str, gridpoint_id)
-  
-  obs_data = import_knmi_data(date_str)
-  
-  # find observation from closest knmi station near gridpoint
-  station_id = unique(forecast_data$station_id)
-  
-  # check station_id
-  if(is.na(station_id) || length(station_id) == 0) {
-    warning("No station_id found for this gridpoint")
-    return(NA)
-  }
-  
-  pattern <- paste0("^", station_id, "_")
-  matching_locations <- unique(grep(pattern, obs_data$LOCATION, value = TRUE))
-  
-  obs_filtered <- obs_data %>%
-    filter(grepl(pattern, LOCATION))
-  
-  # return average of required variable
-  #return(obs_filtered)
-  return(mean(obs_filtered[[var_name]], na.rm = TRUE))
+combine_forecast_obs_wow <- function(date_str, 
+                               gridpoint_id, 
+                               var_name,
+                               lead_time_hours = NULL,
+                               aggregate_obs = "hourly",
+                               include_metadata = TRUE) {
+ 
+ # Get forecast data for the specified date and gridpoint
+ forecast_data <- tidy_forecast_with_station_grid_location(date_str, gridpoint_id)
+ 
+ ####### Import observation data for 10 days starting from date_str
+ # Convert date_str to Date object
+ start_date <- as.Date(date_str)
+ 
+ # Initialize list to store observation data
+ all_obs_data <- list()
+ 
+ # Loop through 10 days
+ for (i in 0:9) {
+   current_date <- start_date + i
+   current_date_str <- format(current_date, "%Y-%m-%d")
+   
+   tryCatch({
+     # Import observation data for current date
+     daily_obs <- import_knmi_data(current_date_str)
+     all_obs_data[[current_date_str]] <- daily_obs
+   })
+ }
+ 
+ # Combine all observation data
+ if (length(all_obs_data) > 0) {
+   obs_data <- bind_rows(all_obs_data)
+ } else {
+   warning("No observation data found for any date")
+   return(forecast_data)
+ }
+ 
+ # Extract station_id from forecast data
+ station_id <- unique(forecast_data$station_id)
+ 
+ # Check if station_id exists
+ if(is.na(station_id) || length(station_id) == 0) {
+   warning("No station_id found for this gridpoint")
+   return(forecast_data)
+ }
+ 
+ # Filter observation data for the specific station
+ pattern <- paste0("^", station_id, "_")
+ 
+ obs_filtered <- obs_data %>%
+   filter(grepl(pattern, LOCATION)) %>%
+   # Convert DTG to POSIXct to match forecast data format
+   mutate(DTG = as.POSIXct(DTG, tz = "UTC"))
+ 
+ # Check if any observations found
+ if(nrow(obs_filtered) == 0) {
+   warning(paste("No observations found for station", station_id))
+   return(forecast_data)
+ }
+ 
+ # Ensure Valid_datetime is POSIXct
+ forecast_data$Valid_datetime <- as.POSIXct(forecast_data$Valid_datetime, tz = "UTC")
+ 
+ # Join observation data to forecast data
+ combined_data <- forecast_data %>%
+   left_join(
+     obs_filtered,
+     by = c("Valid_datetime" = "DTG"),
+     suffix = c("_forecast", "_obs")
+   )
+ 
+ return(combined_data)
 }
 
-# test
-test1 = combine_forecast_obs("2021-08-13", 605, "T_DRYB_10")
-test1
+# Usage example
+combined <- combine_forecast_obs_wow("2021-08-13", 605, var_name = "Temperature")
+combined
 ```
 
 #Combined visualisation funtion
 ```{r}
 forecast_add_obs_line <- function(date_str, gridpoint_id, variable = "Temperature_C") {
   
-  p <- auto_forecast_plot(date_str, gridpoint_id, 1:51)
+  p <- auto_forecast_plot_faceted(date_str, gridpoint_id, 1:51)
   # variable conversion
   var_mapping <- list(
     "Temperature_C" = "T_DRYB_10",
@@ -62,7 +105,7 @@ forecast_add_obs_line <- function(date_str, gridpoint_id, variable = "Temperatur
   
 
   obs_var_name <- var_mapping[[variable]]
-  obs_value <- combine_forecast_obs(date_str, gridpoint_id, obs_var_name)
+  obs_value <- combine_forecast_obs_(date_str, gridpoint_id, obs_var_name)
   
   # add observation line on the original plot
   p_with_obs <- p + 

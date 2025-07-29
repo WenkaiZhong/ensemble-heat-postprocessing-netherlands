@@ -85,8 +85,8 @@ summary(Td)
 # 
 # # From our meeting with Kiri
 # names(t2m_nc$dim)
-# t2m_nc$dim$runtime
-# table(t2m_nc$dim$runtime$vals)
+t2m_nc$dim$runtime
+table(t2m_nc$dim$runtime$vals)
 # t2m_nc$dim$step
 # 
 # # Making sense of meeting with Kir
