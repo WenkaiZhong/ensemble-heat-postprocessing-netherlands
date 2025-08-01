@@ -15,7 +15,6 @@ output: html_document
 ```{r}
 combine_forecast_obs_wow <- function(date_str, 
                                gridpoint_id, 
-                               var_name,
                                lead_time_hours = NULL,
                                aggregate_obs = "hourly",
                                include_metadata = TRUE) {
@@ -88,45 +87,108 @@ combine_forecast_obs_wow <- function(date_str,
 }
 
 # Usage example
-combined <- combine_forecast_obs_wow("2021-08-13", 605, var_name = "Temperature")
+combined <- combine_forecast_obs_wow("2021-01-31 00:00:00", 605)
 combined
 ```
 
 #Combined visualisation funtion
 ```{r}
-forecast_add_obs_line <- function(date_str, gridpoint_id, variable = "Temperature_C") {
+forecast_add_obs_line <- function(date_str, gridpoint_id, variable = "Temperature_C", 
+                                  members = 1:51, data_dir = here("data", "ToSend-01-20-2025")) {
   
-  p <- auto_forecast_plot_faceted(date_str, gridpoint_id, 1:51)
-  # variable conversion
+  # Variable mapping for observations
   var_mapping <- list(
     "Temperature_C" = "T_DRYB_10",
     "DewPoint_C" = "T_DEWP_10"
   )
   
-
   obs_var_name <- var_mapping[[variable]]
-  obs_value <- combine_forecast_obs_(date_str, gridpoint_id, obs_var_name)
+  if (is.null(obs_var_name)) {
+    stop(paste("Invalid variable:", variable, 
+               ". Valid options are:", paste(names(var_mapping), collapse = ", ")))
+  }
   
-  # add observation line on the original plot
-  p_with_obs <- p + 
-    geom_hline(yintercept = obs_value, 
-               color = "red", 
-               linetype = "dashed", 
-               size = 0.5, 
-               alpha = 0.8) +
-    annotate("text", 
-             x = 200,  
-             y = obs_value, 
-             label = paste("Obs avg:", round(obs_value, 1)), 
-             vjust = -0.5,
-             color = "red",
-             fontface = "bold",
-             size = 3)
+  # Get the combined forecast and observation data
+  combined <- combine_forecast_obs_wow(date_str, gridpoint_id)
   
-  return(p_with_obs)
+  if (is.null(combined) || nrow(combined) == 0) {
+    warning(paste("No combined data found for", date_str, "at gridpoint", gridpoint_id))
+    return(NULL)
+  }
+  
+  # Filter for selected members
+  member_names <- paste0("M", members)
+  plot_data <- combined %>%
+    filter(Member %in% member_names) %>%
+    mutate(
+      Forecast_time = format(as.POSIXct(Forecast_init_datetime), "%H:%M"),
+      Lead_time_hours = as.numeric(lead_time_hrs)
+    )
+  
+  # Create the plot
+  p <- ggplot(plot_data, aes(x = Lead_time_hours))
+  
+  # Check number of members
+  n_members <- length(members)
+  
+  # Add forecast lines
+  if (n_members <= 10) {
+    # Use colors that don't include red (reserved for observations)
+    forecast_colors <- c("blue", "darkgreen", "purple", "orange", "brown", 
+                        "pink", "gold", "cyan", "magenta", "gray")[1:n_members]
+    p <- p + 
+      geom_line(aes(y = .data[[variable]], color = Member, group = Member), 
+                size = 1.2, alpha = 0.8) +
+      scale_color_manual(
+        name = "Ensemble",
+        values = forecast_colors
+      )
+  } else {
+    p <- p + 
+      geom_line(aes(y = .data[[variable]], group = Member), 
+                alpha = 0.6, color = "gray", size = 0.8)
+  }
+  
+  # Add observation line
+  p <- p + 
+    geom_line(aes(y = .data[[obs_var_name]]), 
+              color = "red", 
+              size = 2, 
+              alpha = 1) +
+    geom_point(aes(y = .data[[obs_var_name]]), 
+               color = "darkred", 
+               size = 2, 
+               alpha = 0.8)
+  
+  # Add faceting by forecast initialization time
+  p <- p +
+    facet_wrap(~ Forecast_time, ncol = 1) +
+    labs(
+      title = paste("Forecast made on", date_str, "at Gridpoint", gridpoint_id),
+      subtitle = paste(n_members, "ensemble members | Red: Observations (", obs_var_name, ")"),
+      x = "Lead Time (hours)",
+      y = ifelse(variable == "Temperature_C", "Temperature (°C)", 
+                 ifelse(variable == "DewPoint_C", "Dew Point (°C)", variable))
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 12),
+      legend.position = if(n_members <= 10) "right" else "none",
+      panel.grid.minor = element_blank(),
+      strip.text = element_text(size = 11, face = "bold")
+    ) +
+    scale_x_continuous(breaks = seq(0, 240, 24)) +
+    coord_cartesian(xlim = c(0, 240))
+  
+  return(p)
 }
 
-p <- forecast_add_obs_line("2022-08-13", 605)
-p
+# Usage
+p <- forecast_add_obs_line("2021-01-31 00:00:00", 605, variable = "Temperature_C")
+print(p)
+
+
+
 ```
 

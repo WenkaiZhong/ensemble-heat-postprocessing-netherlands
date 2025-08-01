@@ -114,22 +114,19 @@ import_knmi_data <- function(date_str,
       date = as.Date(DTG),
       hour = hour(DTG),
       .after = DTG
-    )
+    )%>%select(-U_SEA_10,-U_BOOL_10,-T_DRYB_SEA_10,-TN_DRYB_10,-TN_10CM_PAST_6H_10,-T_DEWP_SEA_10)
   
   return(data)
 }
 
-data <- import_knmi_data("2021-08-13")
+data <- import_knmi_data("2021-02-01")
+data
 
 location_table <- unique(data[, c("LOCATION", "NAME", "LATITUDE", "LONGITUDE","ALTITUDE")])
-
-location_table
+#location_table
 ```
 
-#function to find specific station average data in a given station
-```{r}
 
-```
 
 #some visualisation tests
 ```{r}
@@ -144,8 +141,6 @@ data%>%filter(LOCATION == "201_T_DV")%>%ggplot(., aes(x = DTG, y = T_DRYB_10, co
        x = "Time",
        y = "Temperature (°C)") +
   theme_minimal()
-
-
 
 ```
 

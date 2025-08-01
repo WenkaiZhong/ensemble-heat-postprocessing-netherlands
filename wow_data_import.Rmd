@@ -8,7 +8,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 #change R language to english
 Sys.setlocale("LC_TIME", "English")
-rm(list = ls())
+#rm(list = ls())
 
 library(here)       
 library(tidyverse)  
@@ -32,6 +32,7 @@ import_WOW_day <- function(date_string) {
    # Read and merge CSV files
    all_data <- lapply(files, function(f) read.csv2(f, stringsAsFactors = FALSE))
    
+   
  } else if (year %in% c("2022", "2023")) {
    library(jsonlite)
    folder <- here("data", paste0("WOW_", year), year)
@@ -39,6 +40,7 @@ import_WOW_day <- function(date_string) {
    
    # Read and merge JSON files
    all_data <- lapply(files, function(f) fromJSON(f)$Object)
+   
  }
  
  # Combine all files
@@ -52,10 +54,78 @@ import_WOW_day <- function(date_string) {
 # Usage
 data_20210102 <- import_WOW_day("2021-01-02")
 data_20220102 <- import_WOW_day("2022-01-02")
-```
 
-#import data for a month
+data_20210102
+```
 ```{r}
+unique_stations <- data_20210102 %>%
+  select(Latitude, Longitude,Height) %>%
+  mutate(
+    Latitude = as.numeric(Latitude),
+    Longitude = as.numeric(Longitude)
+  )%>%
+  distinct()
 
+unique_stations
 ```
+
+```{r}
+library(ggplot2)
+library(dplyr)
+library(maps)
+
+# 首先检查数据
+# 首先检查异常值
+cat("检查异常的纬度值（超出荷兰范围）:\n")
+outliers <- unique_stations %>%
+  filter(Latitude > 53.6 | Latitude < 50.7 | Longitude < 3.3 | Longitude > 7.3)
+print(outliers)
+cat("异常站点数量:", nrow(outliers), "\n\n")
+
+# 方案1：过滤掉明显超出荷兰范围的站点
+unique_stations_filtered <- unique_stations %>%
+  filter(Latitude >= 50.5 & Latitude <= 53.6 & 
+         Longitude >= 3.0 & Longitude <= 7.5)
+
+cat("过滤后的站点数量:", nrow(unique_stations_filtered), "\n")
+cat("过滤后纬度范围:", range(unique_stations_filtered$Latitude), "\n")
+cat("过滤后经度范围:", range(unique_stations_filtered$Longitude), "\n\n")
+
+# 重新创建地图（使用过滤后的数据）
+netherlands_map <- map_data("world", region = "Netherlands")
+
+
+
+# 方案1：创建两个子图比较
+library(gridExtra)
+
+# 荷兰本土站点
+p1a <- ggplot(unique_stations_filtered, aes(x = Longitude, y = Latitude)) +
+  geom_point(aes(color = Height), size = 3, alpha = 0.7) +
+  scale_color_gradient2(low = "blue", mid = "green", high = "red",
+                        midpoint = median(unique_stations_filtered$Height)) +
+  theme_bw() +
+  coord_fixed(ratio = 1.3) +
+  labs(title = paste("荷兰本土站点 (n=", nrow(unique_stations_filtered), ")", sep = ""))
+
+# 异常站点
+if(nrow(outliers) > 0) {
+  p1b <- ggplot(outliers, aes(x = Longitude, y = Latitude)) +
+    geom_point(aes(color = Height), size = 4, alpha = 0.7) +
+    geom_text(aes(label = round(Latitude, 2)), vjust = -1, size = 3) +
+    scale_color_gradient2(low = "blue", mid = "green", high = "red") +
+    theme_bw() +
+    labs(title = paste("异常位置站点 (n=", nrow(outliers), ")", sep = ""))
+  
+  grid.arrange(p1a, p1b, ncol = 2)
+}
+
+# 诊断信息
+cat("\n诊断总结:\n")
+cat("1. 原始数据包含", nrow(unique_stations), "个站点\n")
+cat("2. 有", nrow(outliers), "个站点可能在荷兰地理范围之外\n")
+cat("3. 荷兰本土范围内有", nrow(unique_stations_filtered), "个站点\n")
+cat("4. 建议检查纬度>53.6的站点数据是否正确\n")
+```
+
 

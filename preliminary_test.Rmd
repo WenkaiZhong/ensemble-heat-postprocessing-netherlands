@@ -63,7 +63,7 @@ Td <- ncvar_get(td2m_nc, "x2d") # dew point temperature
 step <- ncvar_get(t2m_nc, "step") #Lead times
 validTime_raw <- ncvar_get(t2m_nc, "validTime") ## ?? no idea what are those number means for date
 #might be minute offsets from a reference time but dont know reference time
-#validTime_raw
+validTime_raw
 
 #close netcdfs
 nc_close(t2m_nc)

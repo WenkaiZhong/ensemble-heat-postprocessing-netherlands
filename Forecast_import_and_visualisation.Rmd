@@ -91,7 +91,7 @@ Dimension meanings:
 ##after test and some preliminary research,we start to import whole dataset
 ##functions that help us to extract data from nc files
 ```{r}
-rm(list = ls())
+#rm(list = ls())
 #use example: temp_2021 <- read_data(2021, "2t")
 read_data <- function(year, var_type, data_dir = here("data", "ToSend-01-20-2025")) {
   # Build filename
@@ -128,42 +128,38 @@ read_data <- function(year, var_type, data_dir = here("data", "ToSend-01-20-2025
 }
 
 # Test
-# temp_2021 <- read_data(2021, "2t")  # Read combined_raw_2t_2021.nc
-#dewp_2021 <- read_data(2021, "2d")  # Read combined_raw_2d_2021.nc
-# temp_2021_start_time <- temp_2021$runtime_units
-# temp_2021_start_time
-# dewp_2021_start_time <- dewp_2021$runtime_units
-# dewp_2021_start_time
+temp_2021 <- read_data(2021, "2t")  # Read combined_raw_2t_2021.nc
+dewp_2021 <- read_data(2021, "2d")  # Read combined_raw_2d_2021.nc
+temp_2021_start_time <- temp_2021$runtime_units
+temp_2021_start_time
+dewp_2021_start_time <- dewp_2021$runtime_units
+dewp_2021_start_time
 ```
 
 ###function that help us to convert readed data to tidy format
 ```{r}
 #example：example_day <- tidy_formation(temp_2021, gridpoint_idx = 1, validtime_idx = 100)
 tidy_formation <- function(data, gridpoint_idx, validtime_idx) {
-  # Parse reference date from runtime_units (e.g., "days since 2021-01-31 00:00:00")
-  ref_date <- as.Date(gsub(".*since\\s+([0-9-]+).*", "\\1", data$runtime_units))
+  # Extract reference datetime from runtime_units (e.g., "days since 2021-01-31 00:00:00")
+  ref_datetime_str <- gsub(".*since\\s+([0-9-]+\\s+[0-9:]+).*", "\\1", data$runtime_units)
+  ref_datetime <- ymd_hms(ref_datetime_str)
   
-  # validtime_idx is the same as day_i in your original code
-  # It directly indexes into runtime_vals
-  forecast_date <- ref_date + days(data$runtime_vals[validtime_idx])
+  # validTime[1, validtime_idx] gives hours from reference time for this forecast initialization
+  init_hours_from_ref <- data$validTime[1, validtime_idx]
+  forecast_init_datetime <- ref_datetime + (init_hours_from_ref * 3600)
   
-  # Get the data slice [gridpoint, step, member, validtime]
-  # This is equivalent to T2[loc_i, 1:41, 1:51, day_i] in your original code
+  print(paste("Forecast initialization time:", forecast_init_datetime))
+  
+  # Extract data slice for [gridpoint, step, member, validtime]
   data_slice <- data$data[gridpoint_idx, , , validtime_idx]
-  
-  # Transpose to get members as rows, steps as columns
   df <- as.data.frame(t(data_slice))
-  
-  # Name columns by step index
   names(df) <- paste0("Step_", 0:40)
-  
-  # Add member column
   df$Member <- paste0("M", seq_len(nrow(df)))
   
   # Create lead time hours vector (0 to 240 hours in 41 steps)
   lead_times_hours <- seq(0, 240, length.out = 41)
   
-  # Pivot to long format and add all necessary columns
+  # Pivot to long format and add metadata
   tidy_df <- df %>%
     pivot_longer(
       cols = starts_with("Step_"),
@@ -176,42 +172,91 @@ tidy_formation <- function(data, gridpoint_idx, validtime_idx) {
       Gridpoint_idx = gridpoint_idx,
       ValidTime_idx = validtime_idx,
       Gridpoint = data$gridpoint[gridpoint_idx],
-      Forecast_date = forecast_date  # This is the date from date_lookup_df
-    ) %>%
-    select(Member, lead_time_hrs, Forecast_date, Forecast_value, 
-           Gridpoint, everything())
+      Forecast_init_datetime = forecast_init_datetime,
+      # Valid time = initialization time + lead time
+      Valid_datetime = forecast_init_datetime + (lead_time_hrs * 3600),
+    )
   
   return(tidy_df)
 }
 
-
 # Example usage and verification
 # # Convert specific validtime to tidy format
-#dewp_example_day <- tidy_formation(dewp_2021, gridpoint_idx = 1, validtime_idx = 100)
-#dewp_example_day
+temp_example_day <- tidy_formation(temp_2021, gridpoint_idx = 1, validtime_idx = 1)
+temp_example_day
 ```
 
 ##function that we only input forecats_time and gridpoint to generate tidy forecast table
 ```{r}
-# Example: tidy_result_2021_01_31_G605 <- tidy_table_ultimate("2021-01-31", 605)
 # Helper function to find runtime index for a given date
 
 # Helper functions
 find_runtime_index <- function(data, target_datetime) {
-  target_date <- as.Date(target_datetime)
-  ref_date <- as.Date(gsub(".*since\\s+([0-9-]+).*", "\\1", data$runtime_units))
-  days_since_ref <- as.numeric(target_date - ref_date)
+  # Check if input includes time or just date
+  has_time <- grepl("\\d{2}:\\d{2}", target_datetime)
   
-  # Find all indices for this date
-  date_matches <- which(abs(data$runtime_vals - days_since_ref) < 0.1)
+  # Parse reference datetime
+  ref_datetime_str <- gsub(".*since\\s+([0-9-]+\\s+[0-9:]+).*", "\\1", data$runtime_units)
+  ref_datetime <- as.POSIXct(ref_datetime_str, tz = "UTC")
   
-  if (length(date_matches) == 0) {
-    idx <- which.min(abs(data$runtime_vals - days_since_ref))
+  if (has_time) {
+    # If time is specified, find exact forecast
+    target_dt <- as.POSIXct(target_datetime, tz = "UTC")
+    
+    # Calculate hours since reference
+    hours_since_ref <- as.numeric(difftime(target_dt, ref_datetime, units = "hours"))
+    
+    # Find matching index in validTime[1,]
+    idx <- which(abs(data$validTime[1,] - hours_since_ref) < 0.1)
+    
+    if (length(idx) == 0) {
+      # No exact match, find closest
+      idx <- which.min(abs(data$validTime[1,] - hours_since_ref))
+      warning(paste("No exact match for", target_datetime, 
+                    ". Returning closest forecast at index", idx))
+    } else if (length(idx) > 1) {
+      # Multiple matches (shouldn't happen), take first
+      idx <- idx[1]
+      warning(paste("Multiple matches found for", target_datetime, 
+                    ". Returning first match at index", idx))
+    }
+    
     return(idx)
+    
+  } else {
+    # If only date is specified, return all forecasts for that day
+    target_date <- as.Date(target_datetime)
+    days_since_ref <- as.numeric(target_date - as.Date(ref_datetime))
+    
+    # Calculate hours for 00:00 and 12:00 UTC
+    hours_00 <- days_since_ref * 24
+    hours_12 <- days_since_ref * 24 + 12
+    
+    # Find indices
+    indices_00 <- which(abs(data$validTime[1,] - hours_00) < 0.1)
+    indices_12 <- which(abs(data$validTime[1,] - hours_12) < 0.1)
+    
+    all_indices <- c(indices_00, indices_12)
+    
+    # Sort by initialization time
+    all_indices <- all_indices[order(data$validTime[1, all_indices])]
+    
+    # Print info about found forecasts
+    for (i in seq_along(all_indices)) {
+      init_hours <- data$validTime[1, all_indices[i]]
+      init_time <- ref_datetime + (init_hours * 3600)
+    }
+    
+    return(all_indices)
   }
-  
-  return(date_matches)
 }
+
+# Test examples
+# Test 1: Find specific forecast with time
+test1 <- find_runtime_index(temp_2021, "2021-01-31 00:00:00")
+test2 <- find_runtime_index(temp_2021, "2021-01-31 12:00:00")
+
+
 
 find_gridpoint_index <- function(data, gridpoint_id) {
   idx <- which(data$gridpoint == gridpoint_id)
@@ -221,143 +266,93 @@ find_gridpoint_index <- function(data, gridpoint_id) {
   return(idx)
 }
 
-# New function: Calculate actual forecast time from validTime
-calculate_forecast_time_from_validtime <- function(data, runtime_idx) {
-  # validTime might be hours since some reference time
-  # Need to find the validTime reference point
-  ref_datetime <- as.POSIXct(gsub(".*since\\s+([0-9-]+\\s+[0-9:]+).*", "\\1", 
-                                  data$runtime_units), tz = "UTC")
-  
-  # Get runtime value and validTime value for this index
-  runtime_days <- data$runtime_vals[runtime_idx]
-  validtime_value <- data$validTime[runtime_idx]
-  
-  # Calculate base date (from runtime_vals)
-  base_date <- ref_datetime + (runtime_days * 86400)
-  
-  # validTime is usually hours since some reference time
-  # If validTime is negative or very large, might need different interpretation
-  # Here we assume validTime is hours since 1900-01-01 (common meteorological convention)
-  validtime_ref <- as.POSIXct("1900-01-01 00:00:00", tz = "UTC")
-  actual_time <- validtime_ref + (validtime_value * 3600)
-  
-  # If calculated time seems unreasonable, try different interpretation
-  if (year(actual_time) != year(base_date)) {
-    # validTime might be relative to a different reference point
-    # Let's check the difference between two validTimes
-    return(list(base_date = base_date, validtime = validtime_value, idx = runtime_idx))
-  }
-  
-  return(list(forecast_time = actual_time, idx = runtime_idx))
-}
+test3 = find_gridpoint_index(temp_2021, 605)
+test3
+
 ```
 
 #check forecasts that be made in a specific date
 ```{r}
+
 # Main function!
 # Example: tidy_result_2021_08_13_G605 <- tidy_table_ultimate("2021-08-13", 605)
-tidy_table_ultimate <- function(forecast_init_time, gridpoint_id, data_dir = here("data", "ToSend-01-20-2025")) {
+tidy_table_ultimate <- function(forecast_datetime, gridpoint_id, temp_data = NULL, dewp_data = NULL) {
+  # Use default data if not provided
+  if (is.null(temp_data)) temp_data <- temp_2021
+  if (is.null(dewp_data)) dewp_data <- dewp_2021
   
-  # Step 1: Extract year
-  year <- year(as.Date(forecast_init_time))
+  # Step 1: Find the runtime index for the specified datetime
+  runtime_idx <- find_runtime_index(temp_data, forecast_datetime)
   
-  # Step 2: Read both datasets
-  temp_data <- read_data(year, "2t", data_dir)
-  dewp_data <- read_data(year, "2d", data_dir)
+  # Check if we got a unique index
+  if (length(runtime_idx) > 1) {
+    stop(paste("Multiple forecasts found for", forecast_datetime, 
+               ". Please specify time (e.g., '2021-01-31 00:00:00')"))
+  }
   
-  # Step 3: Find runtime indices
-  runtime_idx_temp <- find_runtime_index(temp_data, forecast_init_time)
-  runtime_idx_dewp <- find_runtime_index(dewp_data, forecast_init_time)
-  
-  # Step 4: Find gridpoint index
+  # Step 2: Find the gridpoint index
   grid_idx <- find_gridpoint_index(temp_data, gridpoint_id)
   
-  # Step 5: Process each forecast for this date
-  ref_datetime <- as.POSIXct(gsub(".*since\\s+([0-9-]+\\s+[0-9:]+).*", "\\1", 
-                                  temp_data$runtime_units), tz = "UTC")
+  # Step 3: Get temperature data using tidy_formation
+  temp_tidy <- tidy_formation(temp_data, grid_idx, runtime_idx)
   
-  all_day_results <- list()
+  # Step 4: Get dewpoint data using tidy_formation
+  # Assuming dewpoint data has the same structure
+  dewp_tidy <- tidy_formation(dewp_data, grid_idx, runtime_idx)
   
-  # Analyze validTime differences to determine forecast times
-  if (length(runtime_idx_temp) > 1) {
-    validtime_diff <- diff(sort(temp_data$validTime[runtime_idx_temp]))
-    
-    # Sort by validTime - typically smaller validTime corresponds to 00:00, larger to 12:00
-    sorted_idx <- runtime_idx_temp[order(temp_data$validTime[runtime_idx_temp])]
-    
-    forecast_hours <- c(0, 12)  # Assume 00:00 and 12:00 forecasts
-  } else {
-    sorted_idx <- runtime_idx_temp
-    forecast_hours <- 0
-  }
-  
-  # Process each forecast time
-  for (i in 1:length(sorted_idx)) {
-    temp_idx <- sorted_idx[i]
-    
-    # Calculate forecast initialization time
-    forecast_init_datetime <- ref_datetime + (temp_data$runtime_vals[temp_idx] * 86400) + 
-                             (forecast_hours[i] * 3600)
-    
-    # Find corresponding dewpoint index
-    dewp_idx <- runtime_idx_dewp[i]  # Simplified assumption: sequential correspondence
-    
-    # Create lead times
-    lead_times_hours <- seq(0, 240, length.out = 41)
-    
-    # Initialize results for this forecast
-    results <- list()
-    
-    # Extract data for each member and step
-    for (m in 1:51) {
-      for (s in 1:41) {
-        # Extract values
-        temp_val <- tryCatch({
-          temp_data$data[grid_idx[1], s, m, temp_idx]
-        }, error = function(e) { NA })
-        
-        dewp_val <- tryCatch({
-          dewp_data$data[grid_idx[1], s, m, dewp_idx]
-        }, error = function(e) { NA })
-        
-        if (length(temp_val) > 1) temp_val <- temp_val[1]
-        if (length(dewp_val) > 1) dewp_val <- dewp_val[1]
-        
-        valid_datetime <- forecast_init_datetime + (lead_times_hours[s] * 3600)
-        
-        results[[length(results) + 1]] <- data.frame(
-          Member = paste0("M", m),
-          lead_time_hrs = lead_times_hours[s],
-          Forecast_init_datetime = format(forecast_init_datetime, "%Y-%m-%d %H:%M:%S"),
-          Valid_datetime = format(valid_datetime, "%Y-%m-%d %H:%M:%S"),
-          Forecast_init_date = as.Date(forecast_init_datetime),
-          Valid_date = as.Date(valid_datetime),
-          Temperature_K = as.numeric(temp_val),
-          DewPoint_K = as.numeric(dewp_val),
-          Temperature_C = as.numeric(temp_val) - 273.15,
-          DewPoint_C = as.numeric(dewp_val) - 273.15,
-          Gridpoint_ID = gridpoint_id,
-          Runtime_index = temp_idx,
-          ValidTime_value = temp_data$validTime[temp_idx],
-          stringsAsFactors = FALSE
-        )
-      }
-    }
-    
-    all_day_results[[length(all_day_results) + 1]] <- bind_rows(results)
-  }
-  
-  # Combine all results
-  tidy_combined <- bind_rows(all_day_results)
+  # Step 5: Combine temperature and dewpoint data
+  tidy_combined <- temp_tidy %>%
+    # Rename temperature column
+    rename(Temperature_K = Forecast_value) %>%
+    # Add dewpoint data
+    mutate(
+      DewPoint_K = dewp_tidy$Forecast_value,
+      # Convert to Celsius
+      Temperature_C = Temperature_K - 273.15,
+      DewPoint_C = DewPoint_K - 273.15,
+      # Add forecast date and time info
+      Forecast_init_date = as.Date(Forecast_init_datetime),
+      Forecast_init_time = format(Forecast_init_datetime, "%H:%M:%S"),
+      Valid_date = as.Date(Valid_datetime),
+      Valid_time = format(Valid_datetime, "%H:%M:%S"),
+      # Add gridpoint ID to the output
+      Gridpoint_ID = gridpoint_id
+    ) %>%
+    # Reorder columns for clarity
+    select(
+      Member, 
+      lead_time_hrs,
+      Forecast_init_datetime,
+      Forecast_init_date,
+      Forecast_init_time,
+      Valid_datetime,
+      Valid_date,
+      Valid_time,
+      Temperature_K,
+      Temperature_C,
+      DewPoint_K,
+      DewPoint_C,
+      Gridpoint_ID,
+      Gridpoint,
+      everything()
+    )
   
   return(tidy_combined)
 }
 
-# Test
-tidy_result_2021_08_13_G605 <- tidy_table_ultimate("2021-08-13", 605)
-tidy_result_2021_08_13_G605
-# Check the results one day two forecast
-#unique(tidy_result_2021_08_13_G605[, c("Forecast_init_datetime", "Runtime_index", "ValidTime_value")])
+# Test the function
+tidy_result_2021_01_31_00_G605 <- tidy_table_ultimate("2021-01-31 00:00:00", 605)
+tidy_result_2021_01_31_00_G605
+# View the first few rows
+head(tidy_result_2021_01_31_00_G605)
+
+# Check structure
+str(tidy_result_2021_01_31_00_G605)
+
+# Test with different dates and times
+tidy_result_2021_01_31_12_G605 <- tidy_table_ultimate("2021-01-31 12:00:00", 605)
+tidy_result_2021_08_13_00_G605 <- tidy_table_ultimate("2021-08-13 00:00:00", 605)
+
 ```
 
 
@@ -427,37 +422,179 @@ sum(station_count$n_stations)
 ```
 
 ```{r}
-tidy_forecast_with_station_grid_location <- function(target_date, gridpoint_id, 
-                                      data_dir = here("data", "ToSend-01-20-2025")) {
-  # Get forecast data
-  forecast_data <- tidy_table_ultimate(target_date, gridpoint_id, data_dir)
+tidy_forecast_with_station_grid_location <- function(target_datetime, gridpoint_id, 
+                                                    temp_data = NULL, 
+                                                    dewp_data = NULL,
+                                                    station_table = NULL) {
+  
+  # Use default data if not provided
+  if (is.null(temp_data)) temp_data <- temp_2021
+  if (is.null(dewp_data)) dewp_data <- dewp_2021
+  if (is.null(station_table)) station_table <- gridpoint_station_table
+  
+  # Get forecast data using tidy_table_ultimate
+  forecast_data <- tidy_table_ultimate(
+    forecast_datetime = target_datetime, 
+    gridpoint_id = gridpoint_id,
+    temp_data = temp_data,
+    dewp_data = dewp_data
+  )
   
   # Add station information
   forecast_with_station <- forecast_data %>%
     left_join(
-      gridpoint_station_table %>%
+      station_table %>%
         select(gridpoint, sta_id, sta_lat, sta_lon, dist, is_coast, 
                gp_lat, gp_lon, clc_dist0),
       by = c("Gridpoint_ID" = "gridpoint")
     ) %>%
-    # Optionally rename columns for clarity
+    # Rename columns for clarity
     rename(
       station_id = sta_id,
       station_lat = sta_lat,
       station_lon = sta_lon,
       gridpoint_to_station_dist = dist,
       gridpoint_lat = gp_lat,
-      gridpoint_lon = gp_lon
+      gridpoint_lon = gp_lon,
+      coastal_distance = clc_dist0
+    ) %>%
+    # Reorder columns for better readability
+    select(
+      # Forecast timing info
+      Member, lead_time_hrs,
+      Forecast_init_datetime, 
+      Valid_datetime, 
+      # Weather values
+      Temperature_K, Temperature_C, DewPoint_K, DewPoint_C,
+      # Location info
+      Gridpoint_ID, station_id, 
+      station_lat, station_lon,
+      gridpoint_lat, gridpoint_lon,
+      gridpoint_to_station_dist,
+      is_coast, coastal_distance,
+      # Other columns
+      everything()
     )
   
   return(forecast_with_station)
 }
 
-tidy_result_2021_08_13_G605 <- tidy_forecast_with_station_grid_location("2021-08-13", 605)
-tidy_result_2021_08_13_G605
+# Test with specific datetime
+tidy_result_2021_08_13_12_G605 <- tidy_forecast_with_station_grid_location(
+  "2021-08-13 12:00:00", 
+  605
+)
+
+tidy_result_2021_08_13_12_G605
 ```
 
+#function that input the time be forecasted and return relative tidy table
+```{r}
+get_forecasts_for_valid_time <- function(target_valid_datetime, 
+                                       gridpoint_id,
+                                       max_days_back = 10,
+                                       temp_data = NULL,
+                                       dewp_data = NULL,
+                                       station_table = NULL) {
+  
+  # Use default data if not provided
+  if (is.null(temp_data)) temp_data <- temp_2021
+  if (is.null(dewp_data)) dewp_data <- dewp_2021
+  if (is.null(station_table)) station_table <- gridpoint_station_table
+  
+  # Ensure target time is in POSIXct format
+  target_time <- as.POSIXct(target_valid_datetime, tz = "UTC")
+  
+  # Initialize results list
+  all_forecasts <- list()
+  
+  # Print search info
+  message(paste("\n=== Searching forecasts for valid time:", target_valid_datetime, "==="))
+  message(paste("Gridpoint ID:", gridpoint_id))
+  message(paste("Searching back", max_days_back, "days"))
+  
+  # Loop through previous N days to find forecasts that can reach this valid time
+  for (days_back in 0:max_days_back) {
+    # For each day, check both 00:00 and 12:00 forecasts
+    for (hour in c(0, 12)) {
+      # Calculate potential forecast initialization time
+      forecast_init_time <- target_time - (days_back * 24 + hour) * 3600
+      forecast_datetime_str <- format(forecast_init_time, "%Y-%m-%d %H:%M:%S")
+      
+      # Skip if forecast time is in the future
+      if (forecast_init_time > Sys.time()) next
+      
+      # Calculate lead time needed
+      lead_time_hours <- as.numeric(difftime(target_time, forecast_init_time, units = "hours"))
+      
+      # Skip if lead time is beyond 240 hours (10 days)
+      if (lead_time_hours > 240 || lead_time_hours < 0) next
+      
+      tryCatch({
+        # Get forecast data
+        forecast_table <- tidy_forecast_with_station_grid_location(
+          forecast_datetime_str, 
+          gridpoint_id,
+          temp_data = temp_data,
+          dewp_data = dewp_data,
+          station_table = station_table
+        )
+        
+        # Filter rows where Valid_datetime matches target time
+        matched_rows <- forecast_table %>%
+          filter(abs(difftime(Valid_datetime, target_time, units = "secs")) < 1)
+        
+        # If matching rows found, add to results
+        if (nrow(matched_rows) > 0) {
+          matched_rows <- matched_rows %>%
+            mutate(
+              forecast_age_hours = lead_time_hours,
+              forecast_age_days = round(lead_time_hours / 24, 1),
+              forecast_origin = forecast_datetime_str
+            )
+          
+          all_forecasts[[forecast_datetime_str]] <- matched_rows
+          message(paste("✓ Found", nrow(matched_rows)/51, 
+                       "forecast(s) from", forecast_datetime_str,
+                       "(", round(lead_time_hours), "hours ahead)"))
+        }
+        
+      }, error = function(e) {
+        # Only show error for debugging if needed
+        # message(paste("  No data for", forecast_datetime_str))
+      })
+    }
+  }
+  
+  # Combine all results
+  if (length(all_forecasts) > 0) {
+    result <- bind_rows(all_forecasts) %>%
+      arrange(desc(Forecast_init_datetime)) %>%
+      # Add ranking by forecast recency
+      mutate(
+        forecast_rank = dense_rank(desc(Forecast_init_datetime))
+      )
+    
+    message(paste("\nTotal forecasts found:", length(unique(result$Forecast_init_datetime))))
+    message(paste("Total rows:", nrow(result)))
+    
+    return(result)
+  } else {
+    warning(paste("No forecasts found for valid time:", target_valid_datetime))
+    return(NULL)
+  }
+}
 
+# Test the function
+# Find all forecasts predicting temperature for 2021-08-15 12:00:00
+forecasts_for_target <- get_forecasts_for_valid_time(
+  "2021-08-15 12:00:00", 
+  gridpoint_id = 605,
+  max_days_back = 10
+)
+
+forecasts_for_target
+```
 
 ################### ( Visualization starts here :) ######################
 
@@ -648,18 +785,35 @@ ggsave(
 ```
 ```{r}
 #automate plot function using gridpoint_id date and members to plot temperature
-auto_forecast_plot_faceted <- function(date, grid_point, members, 
-                                      variable = "Temperature_C",
-                                      data_dir = here("data", "ToSend-01-20-2025")) {
+auto_forecast_plot_faceted <- function(forecast_datetime, 
+                                     gridpoint_id, 
+                                     members,
+                                     variable = "Temperature_C",
+                                     temp_data = NULL,
+                                     dewp_data = NULL,
+                                     station_table = NULL) {
   
-  # Get the tidy data
-  tidy_data <- tidy_table_ultimate(date, grid_point, data_dir)
+  # Use default data if not provided
+  if (is.null(temp_data)) temp_data <- temp_2021
+  if (is.null(dewp_data)) dewp_data <- dewp_2021
+  
+  # Get the tidy data with station info
+  tidy_data <- tidy_forecast_with_station_grid_location(
+    target_datetime = forecast_datetime,
+    gridpoint_id = gridpoint_id,
+    temp_data = temp_data,
+    dewp_data = dewp_data,
+    station_table = station_table
+  )
   
   # Filter for selected members
   member_names <- paste0("M", members)
   plot_data <- tidy_data %>%
-    filter(Member %in% member_names) %>%
-    mutate(Forecast_time = format(as.POSIXct(Forecast_init_datetime), "%H:%M"))
+    filter(Member %in% member_names)
+  
+  # Extract station info for subtitle
+  station_info <- unique(plot_data$station_id)[1]
+  is_coastal <- unique(plot_data$is_coast)[1]
   
   # Create base plot
   p <- ggplot(plot_data, aes(x = lead_time_hrs, y = .data[[variable]], group = Member))
@@ -667,61 +821,91 @@ auto_forecast_plot_faceted <- function(date, grid_point, members,
   # Check number of members
   n_members <- length(members)
   
-  if (n_members <= 10) {
-    p <- p + geom_line(aes(color = Member), size = 1.2, alpha = 0.8) +
-         scale_color_manual(values = c("red", "blue", "green", "purple", "orange", 
-                                      "brown", "pink", "yellow", "cyan", "magenta")[1:n_members])
-  } else {
-    p <- p + geom_line(alpha = 0.6, color = "gray")
-  }
   
-  # Add faceting
+  # Use gray lines for many members - THIS IS YOUR CASE WITH 51 MEMBERS
+  p <- p + 
+    geom_line(size = 0.3, alpha = 0.4, color = "gray50") +
+    # Add ensemble mean as a thicker line
+    stat_summary(fun = mean, geom = "line", color = "gray", size = 0.3, alpha = 0.6)
+  
+  
+  # Add labels and theme
   p <- p +
-    facet_wrap(~ Forecast_time, ncol = 1) +
     labs(
-      title = paste("Forecast for", date, "at Gridpoint", grid_point),
-      subtitle = paste(n_members, "ensemble members"),
+      title = paste("Forecast initialized at", format(unique(plot_data$Forecast_init_datetime)[1], "%Y-%m-%d %H:%M UTC")),
+      subtitle = paste("Gridpoint", gridpoint_id, "| Station:", station_info, 
+                      "| Coastal:", ifelse(is_coastal, "Yes", "No"),
+                      "| Members:", n_members),
       x = "Lead Time (hours)",
       y = ifelse(variable == "Temperature_C", "Temperature (°C)", 
-                 ifelse(variable == "DewPoint_C", "Dew Point (°C)", variable))
+                ifelse(variable == "DewPoint_C", "Dew Point (°C)", 
+                       ifelse(variable == "Temperature_K", "Temperature (K)",
+                              ifelse(variable == "DewPoint_K", "Dew Point (K)", variable)))),
+      color = if(n_members <= 25) "Member" else NULL
     ) +
-    theme_minimal() +
+    theme_minimal(base_size = 12) +
     theme(
       plot.title = element_text(size = 14, face = "bold"),
-      plot.subtitle = element_text(size = 12),
-      legend.position = if(n_members <= 10) "right" else "none"
+      plot.subtitle = element_text(size = 11, color = "gray40"),
+      legend.position = if(n_members <= 10) "right" else if(n_members <= 25) "bottom" else "none",
+      panel.grid.minor = element_blank(),
+      panel.border = element_rect(fill = NA, color = "gray80")
     ) +
-    scale_x_continuous(breaks = seq(0, 240, 24)) +
+    scale_x_continuous(
+      breaks = seq(0, 240, 24),
+      minor_breaks = seq(0, 240, 12),
+      labels = function(x) paste0(x, "h\n", format(unique(plot_data$Forecast_init_datetime)[1] + x*3600, "%m/%d"))
+    ) +
     coord_cartesian(xlim = c(0, 240))
+  
+  # Add reference lines for days
+  p <- p +
+    geom_vline(xintercept = seq(24, 240, 24), alpha = 0.2, linetype = "dashed")
   
   return(p)
 }
 
 # Usage:
-p_faceted <- auto_forecast_plot_faceted("2021-01-31", 605, members = 1:51)
+p_faceted <- auto_forecast_plot_faceted("2021-01-31 00:00:00", 605, members = 1:51)
 p_faceted
 
 ```
 
 # plot with pdf to be more clear to view the distribution
 ```{r}
-auto_forecast_plot_with_pdf_separate <- function(date, grid_point, members = 1:51, 
+library(patchwork)
+auto_forecast_plot_with_pdf_separate <- function(forecast_datetime, 
+                                                gridpoint_id, 
+                                                members = 1:51, 
                                                 variable = "Temperature_C",
                                                 pdf_times = c(24, 48, 120, 240),
-                                                forecast_hour = 0,  # 0 or 12
-                                                data_dir = here("data", "ToSend-01-20-2025")) {
+                                                temp_data = NULL,
+                                                dewp_data = NULL) {
   
-  tidy_data <- tidy_table_ultimate(date, grid_point, data_dir) %>%
-    filter(Member %in% paste0("M", members),
-           Forecast_init_datetime == paste0(date, " ", sprintf("%02d:00:00", forecast_hour)))
+  # Use default data if not provided
+  if (is.null(temp_data)) temp_data <- temp_2021
+  if (is.null(dewp_data)) dewp_data <- dewp_2021
+  
+  # Get tidy data using the new function
+  tidy_data <- tidy_table_ultimate(
+    forecast_datetime = forecast_datetime,
+    gridpoint_id = gridpoint_id,
+    temp_data = temp_data,
+    dewp_data = dewp_data
+  )
+  
+  # Filter for selected members
+  member_names <- paste0("M", members)
+  plot_data <- tidy_data %>%
+    filter(Member %in% member_names)
   
   n_members <- length(members)
   
-  # Main plot
-  p_main <- ggplot(tidy_data, aes(x = lead_time_hrs, y = .data[[variable]], group = Member)) +
+  # Main plot - exactly like your original
+  p_main <- ggplot(plot_data, aes(x = lead_time_hrs, y = .data[[variable]], group = Member)) +
     geom_line(alpha = 0.6, color = if(n_members <= 10) "auto" else "gray") +
     geom_vline(xintercept = pdf_times, linetype = "dashed", alpha = 0.5) +
-    labs(title = paste("Forecast:", date, forecast_hour, ":00 UTC"), 
+    labs(title = paste("Forecast:", format(unique(plot_data$Forecast_init_datetime)[1], "%Y-%m-%d %H:%M UTC")), 
          x = "Lead Time (hours)", 
          y = variable) +
     theme_minimal() +
@@ -729,9 +913,9 @@ auto_forecast_plot_with_pdf_separate <- function(date, grid_point, members = 1:5
   
   if (n_members <= 10) p_main <- p_main + aes(color = Member)
   
-  # Create a 2x2 grid of PDF plots
+  # Create a 2x2 grid of PDF plots - exactly like your original
   pdf_plots <- lapply(pdf_times, function(t) {
-    pdf_data <- filter(tidy_data, abs(lead_time_hrs - t) < 0.1)
+    pdf_data <- filter(plot_data, abs(lead_time_hrs - t) < 0.1)
     
     ggplot(pdf_data, aes(x = .data[[variable]])) +
       geom_histogram(aes(y = ..density..), bins = 20, fill = "lightblue", 
@@ -750,17 +934,25 @@ auto_forecast_plot_with_pdf_separate <- function(date, grid_point, members = 1:5
       )
   })
   
+  # Load patchwork
+  library(patchwork)
+  
   # Arrange PDFs in a grid below the main plot
   pdf_grid <- wrap_plots(pdf_plots, ncol = 2, nrow = 2)
   
   # Stack main plot and PDF grid
-  p_main / pdf_grid + plot_layout(heights = c(2, 3))
+  combined <- p_main / pdf_grid + plot_layout(heights = c(2, 3))
+  
+  return(combined)
 }
 
 # Usage:
 # Single time with grid PDFs below
-p2 <- auto_forecast_plot_with_pdf_separate("2021-01-31", 605, members = 1:50, forecast_hour = 12)#12 OR
+p_pdf = auto_forecast_plot_with_pdf_separate (
+  forecast_datetime = "2021-01-31 00:00:00",
+  gridpoint_id = 605
+)
 
-p2
+p_pdf 
 ```
 
