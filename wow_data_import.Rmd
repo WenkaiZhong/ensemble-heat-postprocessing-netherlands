@@ -15,117 +15,207 @@ library(tidyverse)
 library(ncdf4) 
 
 ```
+# 1. different dates have been observed by different stations
 
-#import data function only import
+# 2. only limit number of stations has recorded WetBulbTemperature_Celsius
+
+#import data function
 ```{r}
 import_WOW_day <- function(date_string) {
- # Parse date
- parts <- strsplit(date_string, "-")[[1]]
- year <- parts[1]
- date_ymd <- paste0(parts[1], parts[2], parts[3])
- 
- # Set path and format based on year
- if (year == "2021") {
-   folder <- here("data", paste0("WOW_", year))
-   files <- list.files(folder, pattern = paste0("WOW_NL_", date_ymd, "*.csv"), full.names = TRUE)
-   
-   # Read and merge CSV files
-   all_data <- lapply(files, function(f) read.csv2(f, stringsAsFactors = FALSE))
-   
-   
- } else if (year %in% c("2022", "2023")) {
-   library(jsonlite)
-   folder <- here("data", paste0("WOW_", year), year)
-   files <- list.files(folder, pattern = paste0("WOW_NL_", date_ymd, "*.json"), full.names = TRUE)
-   
-   # Read and merge JSON files
-   all_data <- lapply(files, function(f) fromJSON(f)$Object)
-   
- }
- 
- # Combine all files
- if (length(all_data) > 0) {
-   return(do.call(rbind, all_data))
- } else {
-   return(NULL)
- }
-}
-
-# Usage
-data_20210102 <- import_WOW_day("2021-01-02")
-data_20220102 <- import_WOW_day("2022-01-02")
-
-data_20210102
-```
-```{r}
-unique_stations <- data_20210102 %>%
-  select(Latitude, Longitude,Height) %>%
-  mutate(
-    Latitude = as.numeric(Latitude),
-    Longitude = as.numeric(Longitude)
-  )%>%
-  distinct()
-
-unique_stations
-```
-
-```{r}
-library(ggplot2)
-library(dplyr)
-library(maps)
-
-# 首先检查数据
-# 首先检查异常值
-cat("检查异常的纬度值（超出荷兰范围）:\n")
-outliers <- unique_stations %>%
-  filter(Latitude > 53.6 | Latitude < 50.7 | Longitude < 3.3 | Longitude > 7.3)
-print(outliers)
-cat("异常站点数量:", nrow(outliers), "\n\n")
-
-# 方案1：过滤掉明显超出荷兰范围的站点
-unique_stations_filtered <- unique_stations %>%
-  filter(Latitude >= 50.5 & Latitude <= 53.6 & 
-         Longitude >= 3.0 & Longitude <= 7.5)
-
-cat("过滤后的站点数量:", nrow(unique_stations_filtered), "\n")
-cat("过滤后纬度范围:", range(unique_stations_filtered$Latitude), "\n")
-cat("过滤后经度范围:", range(unique_stations_filtered$Longitude), "\n\n")
-
-# 重新创建地图（使用过滤后的数据）
-netherlands_map <- map_data("world", region = "Netherlands")
-
-
-
-# 方案1：创建两个子图比较
-library(gridExtra)
-
-# 荷兰本土站点
-p1a <- ggplot(unique_stations_filtered, aes(x = Longitude, y = Latitude)) +
-  geom_point(aes(color = Height), size = 3, alpha = 0.7) +
-  scale_color_gradient2(low = "blue", mid = "green", high = "red",
-                        midpoint = median(unique_stations_filtered$Height)) +
-  theme_bw() +
-  coord_fixed(ratio = 1.3) +
-  labs(title = paste("荷兰本土站点 (n=", nrow(unique_stations_filtered), ")", sep = ""))
-
-# 异常站点
-if(nrow(outliers) > 0) {
-  p1b <- ggplot(outliers, aes(x = Longitude, y = Latitude)) +
-    geom_point(aes(color = Height), size = 4, alpha = 0.7) +
-    geom_text(aes(label = round(Latitude, 2)), vjust = -1, size = 3) +
-    scale_color_gradient2(low = "blue", mid = "green", high = "red") +
-    theme_bw() +
-    labs(title = paste("异常位置站点 (n=", nrow(outliers), ")", sep = ""))
+  # Parse date
+  parts <- strsplit(date_string, "-")[[1]]
+  year <- parts[1]
+  date_ymd <- paste0(parts[1], parts[2], parts[3])
   
-  grid.arrange(p1a, p1b, ncol = 2)
+  cat("Importing WOW data:", date_string, "\n")
+  
+  all_data <- list()
+  successful_hours <- c()
+  failed_hours <- c()
+  
+  # Set path based on year
+  if (year == "2021") {
+    folder <- here("data", paste0("WOW_", year))
+    file_ext <- "csv"
+    
+    # Loop through 00-23 hour files
+    for (hour in 0:23) {
+      hour_str <- sprintf("%02d", hour)
+      file_name <- paste0("WOW_NL_", date_ymd, hour_str, ".", file_ext)
+      file_path <- file.path(folder, file_name)
+      
+      if (file.exists(file_path)) {
+        tryCatch({
+          data <- read.csv2(file_path, stringsAsFactors = FALSE)
+          all_data[[length(all_data) + 1]] <- data
+          successful_hours <- c(successful_hours, hour)
+        }, error = function(e) {
+          failed_hours <- c(failed_hours, hour)
+        })
+      } else {
+        failed_hours <- c(failed_hours, hour)
+      }
+    }
+    
+  } else if (year %in% c("2022", "2023")) {
+    library(jsonlite)
+    folder <- here("data", paste0("WOW_", year), year)
+    file_ext <- "json"
+    
+    # Loop through 00-23 hour files
+    for (hour in 0:23) {
+      hour_str <- sprintf("%02d", hour)
+      file_name <- paste0("WOW_NL_", date_ymd, hour_str, ".", file_ext)
+      file_path <- file.path(folder, file_name)
+      
+      if (file.exists(file_path)) {
+        tryCatch({
+          # Check file size
+          if (file.info(file_path)$size == 0) {
+            failed_hours <- c(failed_hours, hour)
+            next
+          }
+          
+          # Read JSON
+          json_data <- fromJSON(file_path)
+          
+          # Extract data
+          if (!is.null(json_data$Object)) {
+            all_data[[length(all_data) + 1]] <- json_data$Object
+            successful_hours <- c(successful_hours, hour)
+          } else {
+            failed_hours <- c(failed_hours, hour)
+          }
+          
+        }, error = function(e) {
+          failed_hours <- c(failed_hours, hour)
+        })
+      } else {
+        failed_hours <- c(failed_hours, hour)
+      }
+    }
+  } else {
+    cat("Unsupported year:", year, "\n")
+    return(NULL)
+  }
+  
+  # Summary
+  cat("\nSummary:\n")
+  cat("  Successfully read:", length(successful_hours), "hours of data\n")
+  if (length(failed_hours) > 0) {
+    cat("  Failed/Missing:", length(failed_hours), "hours:", failed_hours, "\n")
+  }
+  
+  # Combine all files
+  if (length(all_data) > 0) {
+    combined_data <- tryCatch({
+      do.call(rbind, all_data)
+    }, error = function(e) {
+      dplyr::bind_rows(all_data)
+    })
+    
+    return(combined_data%>%select(-SiteId,-Id,-UserId,-ImageBlobPath))
+  } else {
+    cat("No data successfully read\n")
+    return(NULL)
+  }
 }
 
-# 诊断信息
-cat("\n诊断总结:\n")
-cat("1. 原始数据包含", nrow(unique_stations), "个站点\n")
-cat("2. 有", nrow(outliers), "个站点可能在荷兰地理范围之外\n")
-cat("3. 荷兰本土范围内有", nrow(unique_stations_filtered), "个站点\n")
-cat("4. 建议检查纬度>53.6的站点数据是否正确\n")
+#usage
+data_20220715 <- import_WOW_day("2022-07-15")
+
+data_20220715
+```
+
+#only return read from station close to target coord
+```{r}
+library(geosphere)
+library(dplyr)
+
+import_WOW_nearest_stations <- function(date_string, target_lat, target_lon, n_stations = 5) {
+  
+  # Import WOW data
+  wow_data <- import_WOW_day(date_string)
+  
+  if (is.null(wow_data) || nrow(wow_data) == 0) {
+    cat("Error: No WOW data available for", date_string, "\n")
+    return(NULL)
+  }
+  
+  # Get unique stations and calculate distances
+  station_distances <- wow_data %>%
+    mutate(
+      Latitude = as.numeric(Latitude),
+      Longitude = as.numeric(Longitude)
+    ) %>%
+    filter(!is.na(Latitude) & !is.na(Longitude)) %>%
+    select(Latitude, Longitude) %>%
+    distinct() %>%
+    mutate(
+      distance_km = distHaversine(
+        cbind(Longitude, Latitude),
+        cbind(target_lon, target_lat)
+      ) / 1000
+    )
+  
+  # Get coordinates of nearest n stations
+  nearest_coords <- station_distances %>%
+    arrange(distance_km) %>%
+    slice_head(n = n_stations) %>%
+    select(Latitude, Longitude)
+  
+  # Filter original data to only include observations from nearest stations
+  nearest_obs <- wow_data %>%
+    mutate(
+      Latitude = as.numeric(Latitude),
+      Longitude = as.numeric(Longitude)
+    ) %>%
+    inner_join(nearest_coords, by = c("Latitude", "Longitude")) %>%
+    # Add distance information
+    mutate(
+      distance_to_target_km = distHaversine(
+        cbind(Longitude, Latitude),
+        cbind(target_lon, target_lat)
+      ) / 1000,
+      target_lat = target_lat,
+      target_lon = target_lon
+    ) %>%
+    arrange(distance_to_target_km, ReportEndDateTime)
+  
+  cat("Found", nrow(nearest_obs), "observations from", n_stations, "nearest stations\n")
+  cat("Distance range:", round(min(nearest_obs$distance_to_target_km), 2), "-", 
+      round(max(nearest_obs$distance_to_target_km), 2), "km\n")
+  
+  return(nearest_obs)
+}
+
+amsterdam_stations <- import_WOW_nearest_stations("2022-07-15", 52.37, 4.90, n_stations = 5)
+amsterdam_stations
+#####time is not continuous
+```
+
+
+#find station information in a specific date
+```{r}
+get_unique_wow_stations <- function(date_str) {
+  # import date
+  data_day <- import_WOW_day(date_str)
+  
+  # extract station info
+  unique_stations <- data_day %>%
+    select(Latitude, Longitude, Height) %>%
+    mutate(
+      Latitude = as.numeric(Latitude),
+      Longitude = as.numeric(Longitude),
+      Height = as.numeric(Height)
+    ) %>%
+    distinct()
+  return(unique_stations)
+}
+
+wow_stations_20210102 <- get_unique_wow_stations("2022-07-15")
+
+wow_stations_20210102
 ```
 
 

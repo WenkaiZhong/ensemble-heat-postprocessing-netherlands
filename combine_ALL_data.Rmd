@@ -6,10 +6,325 @@ output: html_document
 ---
 
 ############################### before run this file u should run three individual data import files first (forecast,obs,wow)#######################################
+#Visualise all offical stations, cities and wow stations
 ```{r}
-# Set working directory if needed
-# setwd(here())
+# Load required libraries
+library(ggplot2)
+library(ggrepel)
+library(dplyr)
+library(maps)
+library(mapdata)
+
+# Create the combined map
+gridpoint_station_map <- ggplot() +
+  # Add Netherlands boundary using maps package
+  borders("world", regions = "Netherlands", 
+          fill = NA, colour = "black", size = 0.8) +
+  
+  # Connection lines between gridpoints and stations
+  geom_segment(data = gridpoint_station_table,
+               aes(x = gp_lon, y = gp_lat, xend = sta_lon, yend = sta_lat),
+               alpha = 0.3) +
+  
+  # Plot gridpoint points (dark blue squares)
+  geom_point(data = gridpoint_station_table,
+             aes(x = gp_lon, y = gp_lat, shape = "Gridpoints"),
+             color = "darkblue", size = 3, alpha = 0.6) +
+  
+  # Plot primary stations (red circles)
+  geom_point(data = gridpoint_station_table %>% 
+               filter(!is.na(sta_id) & station_type == "primary"),
+             aes(x = sta_lon, y = sta_lat, shape = "Primary Stations"),
+             color = "red", size = 3, alpha = 0.6) +
+  
+  # Plot secondary stations (yellow triangles)
+  geom_point(data = gridpoint_station_table %>% 
+               filter(!is.na(sta_id) & station_type == "secondary"),
+             aes(x = sta_lon, y = sta_lat, shape = "Secondary Stations"),
+             color = "gold", size = 3, alpha = 0.6) +
+  
+  # Plot WOW stations (green diamonds)
+  geom_point(data = unique_stations,
+             aes(x = Longitude, y = Latitude, shape = "WOW Stations"),
+             color = "darkgreen", size = 2.5, alpha = 0.3) +
+  
+  # Plot cities with size based on population rank
+  geom_point(data = cities,
+             aes(x = city_lon, y = city_lat, shape = "Cities", 
+                 size = 26 - population_rank),  # Larger size for higher ranked cities
+             color = "purple", alpha = 0.8) +
+  
+  # Set shapes for all point types
+  scale_shape_manual(values = c("Gridpoints" = 15,           # Square
+                               "Primary Stations" = 16,       # Circle
+                               "Secondary Stations" = 17,     # Triangle
+                               "WOW Stations" = 18,          # Diamond
+                               "Cities" = 19),               # Solid circle
+                     name = "Type") +
+  
+  # Set size scale for cities
+  scale_size_continuous(range = c(2, 6), guide = "none") +
+  
+  # Add gridpoint labels
+  geom_text_repel(data = gridpoint_station_table,
+                  aes(x = gp_lon, y = gp_lat, label = gridpoint),
+                  size = 2.5,
+                  color = "darkblue",
+                  box.padding = 0.3,
+                  point.padding = 0.2,
+                  max.overlaps = 20) +
+  
+  # Add primary station labels
+  geom_text_repel(data = gridpoint_station_table %>% 
+                    filter(!is.na(sta_id) & station_type == "primary"),
+                  aes(x = sta_lon, y = sta_lat, 
+                      label = paste0("S", sta_id)),
+                  size = 2,
+                  color = "red",
+                  nudge_y = 0.02,
+                  box.padding = 0.2,
+                  point.padding = 0.1,
+                  max.overlaps = 20) +
+  
+  # Add secondary station labels
+  geom_text_repel(data = gridpoint_station_table %>% 
+                    filter(!is.na(sta_id) & station_type == "secondary"),
+                  aes(x = sta_lon, y = sta_lat, 
+                      label = paste0("S", sta_id)),
+                  size = 2,
+                  color = "gold",
+                  nudge_y = -0.02,
+                  box.padding = 0.2,
+                  point.padding = 0.1,
+                  max.overlaps = 20) +
+  
+  # Add city labels (for all cities)
+  geom_text_repel(data = cities,
+                  aes(x = city_lon, y = city_lat, label = city),
+                  size = 2.5,
+                  color = "purple",
+                  fontface = "bold",
+                  box.padding = 0.2,
+                  point.padding = 0.2,
+                  segment.size = 0.3,
+                  segment.alpha = 0.5,
+                  max.overlaps = 30,
+                  force = 2) +
+  
+  # Titles and labels
+  labs(title = "Weather Observation Network in the Netherlands",
+       subtitle = "ECMWF Gridpoints, KNMI Stations (Primary/Secondary), WOW Stations, and Major Cities",
+       x = "Longitude",
+       y = "Latitude",
+       caption = "Cities sized by population rank | WOW stations in green") +
+  
+  # Theme settings
+  theme_minimal() +
+  theme(legend.position = "bottom",
+        legend.box = "horizontal",
+        legend.text = element_text(size = 8),
+        plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5, size = 10),
+        plot.caption = element_text(hjust = 0.5, size = 8, face = "italic")) +
+  
+  # Set coordinate limits to focus on Netherlands
+  coord_cartesian(xlim = c(3.3, 7.3), ylim = c(50.7, 53.6))
+
+# Display the map
+gridpoint_station_map
+
 ```
+#find 1 official station and 5 WOW stations that cloese to big cities
+```{r}
+library(geosphere)
+
+create_city_station_connections <- function(date_str, n_wow_stations = 5) {
+  
+  cat("Creating city-station connection table for", date_str, "...\n")
+  
+  # 1. Get WOW stations for this date
+  unique_stations <- get_unique_wow_stations(date_str)
+  
+  # 2. Check if there are enough WOW stations
+  if (nrow(unique_stations) < n_wow_stations) {
+    warning(paste("Insufficient WOW stations! Only", nrow(unique_stations), "stations available"))
+    n_wow_stations <- nrow(unique_stations)
+  }
+  
+  # 3. Create base city_connections (if not already exists)
+  # Assumes city_connections already exists with city and nearest official station info
+  # If not, need to create it first
+  
+  # 4. Add WOW station information to city_connections
+  city_connections_with_wow <- city_connections %>%
+    rowwise() %>%
+    mutate(
+      # Calculate distances to all WOW stations
+      wow_distances = list(
+        distHaversine(
+          cbind(city_lon, city_lat), 
+          cbind(unique_stations$Longitude, unique_stations$Latitude)
+        ) / 1000  # Convert to kilometers
+      ),
+      # Find indices of nearest n stations
+      nearest_wow_idx = list(order(wow_distances)[1:min(n_wow_stations, length(wow_distances))]),
+      # Get distances of nearest stations
+      nearest_wow_distances = list(wow_distances[nearest_wow_idx]),
+      # Get coordinates of nearest stations
+      nearest_wow_lat = list(unique_stations$Latitude[nearest_wow_idx]),
+      nearest_wow_lon = list(unique_stations$Longitude[nearest_wow_idx]),
+      # Get IDs of nearest stations
+      nearest_wow_id = list(unique_stations$wow_id[nearest_wow_idx]),
+      # Add date marker
+      wow_data_date = date_str
+    ) %>%
+    ungroup() %>%
+    select(-wow_distances)  # Remove complete distance list
+  
+  # 5. Add useful summary information
+  city_connections_with_wow <- city_connections_with_wow %>%
+    mutate(
+      # Distance to nearest WOW station
+      closest_wow_distance = sapply(nearest_wow_distances, function(x) x[1]),
+      # Whether WOW station is closer than official station
+      wow_closer_than_official = closest_wow_distance < distance_km,
+      # Distance improvement
+      distance_improvement = distance_km - closest_wow_distance
+    )
+  
+  # 6. Print summary statistics
+  cat("\n===== Summary Statistics =====\n")
+  cat("Date:", date_str, "\n")
+  cat("Number of cities:", nrow(city_connections_with_wow), "\n")
+  cat("Total WOW stations:", nrow(unique_stations), "\n")
+  cat("WOW stations connected per city:", n_wow_stations, "\n")
+  
+  wow_better <- sum(city_connections_with_wow$wow_closer_than_official)
+  cat("\nCities where WOW is closer than official:", wow_better, "/", nrow(city_connections_with_wow), "\n")
+  cat("Average distance improvement:", 
+      round(mean(city_connections_with_wow$distance_improvement[city_connections_with_wow$wow_closer_than_official]), 2), 
+      "km\n")
+  
+  return(city_connections_with_wow)
+}
+
+#usage
+city_connections_summer <- create_city_station_connections("2022-07-15")
+```
+#plot cities and its 5 closest WOW stations and 1 official station
+
+```{r}
+# Function to create city-station connection map
+plot_city_station_connections <- function(city_connections_data, selected_cities = NULL) {
+  
+  # If specific cities are selected, filter the data
+  if (!is.null(selected_cities)) {
+    city_connections_data <- city_connections_data %>%
+      filter(city %in% selected_cities)
+  }
+  
+  # Prepare WOW stations data for plotting
+  wow_stations_plot <- city_connections_data %>%
+    select(city, nearest_wow_lat, nearest_wow_lon, nearest_wow_distances) %>%
+    unnest(c(nearest_wow_lat, nearest_wow_lon, nearest_wow_distances)) %>%
+    group_by(city) %>%
+    mutate(
+      wow_rank = row_number(),
+      station_label = paste0("W", wow_rank)
+    ) %>%
+    ungroup()
+  
+  # Create the map
+  city_station_map <- ggplot() +
+    # Add Netherlands boundary
+    borders("world", regions = "Netherlands", 
+            fill = NA, colour = "black", size = 0.8) +
+    
+    # Connection lines from cities to official stations
+    geom_segment(data = city_connections_data,
+                 aes(x = city_lon, y = city_lat, 
+                     xend = station_lon, yend = station_lat),
+                 color = "red", alpha = 0.3, linetype = "solid", size = 0.8) +
+    
+    # Connection lines from cities to WOW stations
+    geom_segment(data = wow_stations_plot,
+                 aes(x = city_connections_data$city_lon[match(city, city_connections_data$city)], 
+                     y = city_connections_data$city_lat[match(city, city_connections_data$city)], 
+                     xend = nearest_wow_lon, yend = nearest_wow_lat),
+                 color = "darkgreen", alpha = 0.2, linetype = "dashed", size = 0.5) +
+    
+    # Plot official stations (red circles)
+    geom_point(data = city_connections_data,
+               aes(x = station_lon, y = station_lat, shape = "Official Stations"),
+               color = "red", size = 3, alpha = 0.8) +
+    
+    # Plot WOW stations (green diamonds)
+    geom_point(data = wow_stations_plot,
+               aes(x = nearest_wow_lon, y = nearest_wow_lat, shape = "WOW Stations"),
+               color = "darkgreen", size = 2.5, alpha = 0.6) +
+    
+    # Plot cities (purple circles, sized by population)
+    geom_point(data = city_connections_data,
+               aes(x = city_lon, y = city_lat, shape = "Cities"),
+               color = "purple", alpha = 0.8,size = 3.5) +
+    
+    # Set shapes
+    scale_shape_manual(values = c("Official Stations" = 16,    # Circle
+                                 "WOW Stations" = 18,          # Diamond
+                                 "Cities" = 19),               # Solid circle
+                       name = "Type") +
+    
+    # Set size scale for cities
+    scale_size_continuous(range = c(3, 7), guide = "none") +
+    
+    # Add city labels
+    geom_text_repel(data = city_connections_data,
+                    aes(x = city_lon, y = city_lat, label = city),
+                    size = 3,
+                    color = "purple",
+                    fontface = "bold",
+                    box.padding = 0.3,
+                    point.padding = 0.3,
+                    max.overlaps = 30) +
+    
+    # Add official station labels
+    geom_text_repel(data = city_connections_data,
+                    aes(x = station_lon, y = station_lat, 
+                        label = paste0("S", nearest_idx)),
+                    size = 2,
+                    color = "red",
+                    box.padding = 0.2,
+                    point.padding = 0.1,
+                    max.overlaps = 20) +
+    
+    # Titles and labels
+    labs(title = paste("City-Station Connections -", unique(city_connections_data$wow_data_date)),
+         subtitle = "Cities with nearest Official Station (red) and 5 closest WOW Stations (green)",
+         x = "Longitude",
+         y = "Latitude",
+         caption = "Solid lines: City to Official Station | Dashed lines: City to WOW Stations") +
+    
+    # Theme settings
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          legend.box = "horizontal",
+          legend.text = element_text(size = 8),
+          plot.title = element_text(hjust = 0.5, size = 14, face = "bold"),
+          plot.subtitle = element_text(hjust = 0.5, size = 10),
+          plot.caption = element_text(hjust = 0.5, size = 8, face = "italic")) +
+    
+    # Set coordinate limits to focus on Netherlands
+    coord_cartesian(xlim = c(3.3, 7.3), ylim = c(50.7, 53.6))
+  
+  return(city_station_map)
+}
+
+
+#plot all
+map_all <- plot_city_station_connections(city_connections_summer)
+print(map_all)
+```
+
 
 #combine forecast with obs
 ```{r}
@@ -87,14 +402,19 @@ combine_forecast_obs_wow <- function(date_str,
 }
 
 # Usage example
-combined <- combine_forecast_obs_wow("2021-01-31 00:00:00", 605)
+combined <- combine_forecast_obs_wow("2021-01-31 12:00:00", 605)
 combined
 ```
 
 #Combined visualisation funtion
 ```{r}
-forecast_add_obs_line <- function(date_str, gridpoint_id, variable = "Temperature_C", 
-                                  members = 1:51, data_dir = here("data", "ToSend-01-20-2025")) {
+forecast_add_obs_line <- function(forecast_datetime, 
+                                gridpoint_id, 
+                                variable = "Temperature_C", 
+                                members = 1:51,
+                                temp_data = NULL,
+                                dewp_data = NULL,
+                                station_table = NULL) {
   
   # Variable mapping for observations
   var_mapping <- list(
@@ -109,24 +429,23 @@ forecast_add_obs_line <- function(date_str, gridpoint_id, variable = "Temperatur
   }
   
   # Get the combined forecast and observation data
-  combined <- combine_forecast_obs_wow(date_str, gridpoint_id)
+  combined <- combine_forecast_obs_wow(
+    date_str = forecast_datetime, 
+    gridpoint_id = gridpoint_id
+  )
   
   if (is.null(combined) || nrow(combined) == 0) {
-    warning(paste("No combined data found for", date_str, "at gridpoint", gridpoint_id))
+    warning(paste("No combined data found for", forecast_datetime, "at gridpoint", gridpoint_id))
     return(NULL)
   }
   
   # Filter for selected members
   member_names <- paste0("M", members)
   plot_data <- combined %>%
-    filter(Member %in% member_names) %>%
-    mutate(
-      Forecast_time = format(as.POSIXct(Forecast_init_datetime), "%H:%M"),
-      Lead_time_hours = as.numeric(lead_time_hrs)
-    )
+    filter(Member %in% member_names)
   
   # Create the plot
-  p <- ggplot(plot_data, aes(x = Lead_time_hours))
+  p <- ggplot(plot_data, aes(x = lead_time_hrs, y = .data[[variable]]))
   
   # Check number of members
   n_members <- length(members)
@@ -137,35 +456,47 @@ forecast_add_obs_line <- function(date_str, gridpoint_id, variable = "Temperatur
     forecast_colors <- c("blue", "darkgreen", "purple", "orange", "brown", 
                         "pink", "gold", "cyan", "magenta", "gray")[1:n_members]
     p <- p + 
-      geom_line(aes(y = .data[[variable]], color = Member, group = Member), 
-                size = 1.2, alpha = 0.8) +
+      geom_line(aes(color = Member, group = Member), 
+                size = 0.8, alpha = 0.8) +
       scale_color_manual(
         name = "Ensemble",
         values = forecast_colors
       )
   } else {
+    # Gray spaghetti plot for many members
     p <- p + 
-      geom_line(aes(y = .data[[variable]], group = Member), 
-                alpha = 0.6, color = "gray", size = 0.8)
+      geom_line(aes(group = Member), 
+                alpha = 0.3, color = "gray50", size = 0.3) +
+      # Add ensemble mean
+      stat_summary(fun = mean, geom = "line", 
+                   color = "black", size = 1, alpha = 0.9)
   }
   
-  # Add observation line
-  p <- p + 
-    geom_line(aes(y = .data[[obs_var_name]]), 
-              color = "red", 
-              size = 2, 
-              alpha = 1) +
-    geom_point(aes(y = .data[[obs_var_name]]), 
-               color = "darkred", 
-               size = 2, 
-               alpha = 0.8)
+  # Add observation line - check if observation data exists
+  if (obs_var_name %in% names(plot_data) && !all(is.na(plot_data[[obs_var_name]]))) {
+    p <- p + 
+      geom_line(aes(y = .data[[obs_var_name]]), 
+                color = "red", 
+                size = 1.5, 
+                alpha = 1,
+                na.rm = TRUE) +
+      geom_point(aes(y = .data[[obs_var_name]]), 
+                 color = "darkred", 
+                 size = 2, 
+                 alpha = 0.8,
+                 na.rm = TRUE)
+  } else {
+    warning(paste("No observation data found for variable:", obs_var_name))
+  }
   
-  # Add faceting by forecast initialization time
+  # Add labels and theme
+  station_info <- unique(plot_data$station_id)[1]
   p <- p +
-    facet_wrap(~ Forecast_time, ncol = 1) +
     labs(
-      title = paste("Forecast made on", date_str, "at Gridpoint", gridpoint_id),
-      subtitle = paste(n_members, "ensemble members | Red: Observations (", obs_var_name, ")"),
+      title = paste("Forecast vs Observations -", 
+                    format(unique(plot_data$Forecast_init_datetime)[1], "%Y-%m-%d %H:%M UTC")),
+      subtitle = paste("Gridpoint", gridpoint_id, "| Station:", station_info, 
+                      "| Members:", n_members, "| Red: Observations"),
       x = "Lead Time (hours)",
       y = ifelse(variable == "Temperature_C", "Temperature (°C)", 
                  ifelse(variable == "DewPoint_C", "Dew Point (°C)", variable))
@@ -173,22 +504,138 @@ forecast_add_obs_line <- function(date_str, gridpoint_id, variable = "Temperatur
     theme_minimal() +
     theme(
       plot.title = element_text(size = 14, face = "bold"),
-      plot.subtitle = element_text(size = 12),
+      plot.subtitle = element_text(size = 12, color = "gray40"),
       legend.position = if(n_members <= 10) "right" else "none",
-      panel.grid.minor = element_blank(),
-      strip.text = element_text(size = 11, face = "bold")
+      panel.grid.minor = element_blank()
     ) +
     scale_x_continuous(breaks = seq(0, 240, 24)) +
     coord_cartesian(xlim = c(0, 240))
   
+  # Add reference lines for days
+  p <- p +
+    geom_vline(xintercept = seq(24, 240, 24), alpha = 0.2, linetype = "dashed")
+  
   return(p)
 }
 
-# Usage
-p <- forecast_add_obs_line("2021-01-31 00:00:00", 605, variable = "Temperature_C")
-print(p)
+# Enhanced version with error statistics
+forecast_add_obs_with_stats <- function(forecast_datetime, 
+                                      gridpoint_id, 
+                                      variable = "Temperature_C", 
+                                      members = 1:51,
+                                      show_error_band = TRUE) {
+  
+  # Variable mapping
+  var_mapping <- list(
+    "Temperature_C" = "T_DRYB_10",
+    "DewPoint_C" = "T_DEWP_10"
+  )
+  
+  obs_var_name <- var_mapping[[variable]]
+  
+  # Get combined data
+  combined <- combine_forecast_obs_wow(forecast_datetime, gridpoint_id)
+  
+  if (is.null(combined) || nrow(combined) == 0) {
+    stop("No data found")
+  }
+  
+  # Filter members
+  member_names <- paste0("M", members)
+  plot_data <- combined %>%
+    filter(Member %in% member_names)
+  
+  # Calculate ensemble statistics
+  ensemble_stats <- plot_data %>%
+    group_by(lead_time_hrs) %>%
+    summarise(
+      ensemble_mean = mean(.data[[variable]], na.rm = TRUE),
+      ensemble_median = median(.data[[variable]], na.rm = TRUE),
+      ensemble_q25 = quantile(.data[[variable]], 0.25, na.rm = TRUE),
+      ensemble_q75 = quantile(.data[[variable]], 0.75, na.rm = TRUE),
+      ensemble_q10 = quantile(.data[[variable]], 0.1, na.rm = TRUE),
+      ensemble_q90 = quantile(.data[[variable]], 0.9, na.rm = TRUE),
+      obs_value = first(.data[[obs_var_name]]),
+      .groups = "drop"
+    )
+  
+  # Create plot
+  p <- ggplot()
+  
+  # Add error bands if requested
+  if (show_error_band) {
+    p <- p +
+      geom_ribbon(data = ensemble_stats,
+                  aes(x = lead_time_hrs, ymin = ensemble_q10, ymax = ensemble_q90),
+                  fill = "lightblue", alpha = 0.3) +
+      geom_ribbon(data = ensemble_stats,
+                  aes(x = lead_time_hrs, ymin = ensemble_q25, ymax = ensemble_q75),
+                  fill = "blue", alpha = 0.3)
+  }
+  
+  # Add individual members if not too many
+  if (length(members) <= 20) {
+    p <- p +
+      geom_line(data = plot_data,
+                aes(x = lead_time_hrs, y = .data[[variable]], group = Member),
+                alpha = 0.3, color = "gray50", size = 0.3)
+  }
+  
+  # Add ensemble mean and median
+  p <- p +
+    geom_line(data = ensemble_stats,
+              aes(x = lead_time_hrs, y = ensemble_mean),
+              color = "blue", size = 1.2) +
+    geom_line(data = ensemble_stats,
+              aes(x = lead_time_hrs, y = ensemble_median),
+              color = "darkblue", size = 1, linetype = "dashed")
+  
+  # Add observations
+  p <- p +
+    geom_line(data = ensemble_stats,
+              aes(x = lead_time_hrs, y = obs_value),
+              color = "red", size = 1.5, na.rm = TRUE) +
+    geom_point(data = ensemble_stats,
+               aes(x = lead_time_hrs, y = obs_value),
+               color = "darkred", size = 2, na.rm = TRUE)
+  
+  # Labels and theme
+  p <- p +
+    labs(
+      title = paste("Forecast vs Observations -", 
+                    format(as.POSIXct(forecast_datetime), "%Y-%m-%d %H:%M UTC")),
+      subtitle = paste("Blue: Ensemble mean/median | Red: Observations | Shading: 10-90% & 25-75% intervals"),
+      x = "Lead Time (hours)",
+      y = ifelse(variable == "Temperature_C", "Temperature (°C)", variable)
+    ) +
+    theme_minimal() +
+    scale_x_continuous(breaks = seq(0, 240, 24))
+  
+  return(p)
+}
+
+# Usage examples:
+# Basic plot
+p1 <- forecast_add_obs_line(
+  forecast_datetime = "2021-02-02 00:00:00",
+  gridpoint_id = 605
+)
+print(p1)
+
+# With error statistics
+p2 <- forecast_add_obs_with_stats(
+  forecast_datetime = "2021-02-01 00:00:00",
+  gridpoint_id = 605,
+  variable = "Temperature_C",
+  show_error_band = TRUE
+)
+print(p2)
 
 
+```
+
+###combine obs with WOW
+```{r}
 
 ```
 

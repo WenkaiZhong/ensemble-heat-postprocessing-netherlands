@@ -418,7 +418,7 @@ sum(station_count$n_stations)
 
 # only found 43 stations in 38 grid points
 
-# In addition, for some gridpoints like 819 , it has 2 relate stations with different station_id, sta_lat and sta_lon
+# In addition, for some grid points like 819 , it has 2 relate stations with different station_id, sta_lat and sta_lon
 ```
 
 ```{r}
@@ -472,8 +472,6 @@ tidy_forecast_with_station_grid_location <- function(target_datetime, gridpoint_
       gridpoint_lat, gridpoint_lon,
       gridpoint_to_station_dist,
       is_coast, coastal_distance,
-      # Other columns
-      everything()
     )
   
   return(forecast_with_station)
@@ -507,11 +505,6 @@ get_forecasts_for_valid_time <- function(target_valid_datetime,
   
   # Initialize results list
   all_forecasts <- list()
-  
-  # Print search info
-  message(paste("\n=== Searching forecasts for valid time:", target_valid_datetime, "==="))
-  message(paste("Gridpoint ID:", gridpoint_id))
-  message(paste("Searching back", max_days_back, "days"))
   
   # Loop through previous N days to find forecasts that can reach this valid time
   for (days_back in 0:max_days_back) {
@@ -574,9 +567,6 @@ get_forecasts_for_valid_time <- function(target_valid_datetime,
       mutate(
         forecast_rank = dense_rank(desc(Forecast_init_datetime))
       )
-    
-    message(paste("\nTotal forecasts found:", length(unique(result$Forecast_init_datetime))))
-    message(paste("Total rows:", nrow(result)))
     
     return(result)
   } else {
