@@ -127,7 +127,6 @@ location_table <- unique(data[, c("LOCATION", "NAME", "LATITUDE", "LONGITUDE","A
 ```
 
 
-
 #some visualisation tests
 ```{r}
 print(paste("Number of stations:", n_distinct(data$LOCATION)))

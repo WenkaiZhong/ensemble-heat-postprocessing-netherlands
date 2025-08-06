@@ -19,13 +19,18 @@ library(ncdf4)
 
 # 2. only limit number of stations has recorded WetBulbTemperature_Celsius
 
+# 3. 2021 data has different varaible name comapre to 22 and 23 data like ReportEndDateTime and LocalReportEndDateTime
+
+# 4. 2021 data does not have ExternalSiteId,
+
 #import data function
 ```{r}
 import_WOW_day <- function(date_string) {
   # Parse date
   parts <- strsplit(date_string, "-")[[1]]
   year <- parts[1]
-  date_ymd <- paste0(parts[1], parts[2], parts[3])
+  month <- parts[2]
+  day <- parts[3]
   
   cat("Importing WOW data:", date_string, "\n")
   
@@ -41,15 +46,26 @@ import_WOW_day <- function(date_string) {
     # Loop through 00-23 hour files
     for (hour in 0:23) {
       hour_str <- sprintf("%02d", hour)
-      file_name <- paste0("WOW_NL_", date_ymd, hour_str, ".", file_ext)
+      # 修正文件名格式：WOW_NL_YYYYMMDD00.csv
+      file_name <- paste0("WOW_NL_", year, month, day, hour_str, ".", file_ext)
       file_path <- file.path(folder, file_name)
+      
+      # Debug: 打印要查找的文件名
+      if (hour == 0) {  # 只打印第一个，避免太多输出
+        cat("Looking for file:", file_name, "\n")
+      }
       
       if (file.exists(file_path)) {
         tryCatch({
           data <- read.csv2(file_path, stringsAsFactors = FALSE)
-          all_data[[length(all_data) + 1]] <- data
-          successful_hours <- c(successful_hours, hour)
+          if (nrow(data) > 0) {  # 只有当数据不为空时才添加
+            all_data[[length(all_data) + 1]] <- data
+            successful_hours <- c(successful_hours, hour)
+          } else {
+            failed_hours <- c(failed_hours, hour)
+          }
         }, error = function(e) {
+          cat("Error reading", file_name, ":", e$message, "\n")
           failed_hours <- c(failed_hours, hour)
         })
       } else {
@@ -65,7 +81,8 @@ import_WOW_day <- function(date_string) {
     # Loop through 00-23 hour files
     for (hour in 0:23) {
       hour_str <- sprintf("%02d", hour)
-      file_name <- paste0("WOW_NL_", date_ymd, hour_str, ".", file_ext)
+      # 2022-2023年也使用相同的文件名格式
+      file_name <- paste0("WOW_NL_", year, month, day, hour_str, ".", file_ext)
       file_path <- file.path(folder, file_name)
       
       if (file.exists(file_path)) {
@@ -103,7 +120,7 @@ import_WOW_day <- function(date_string) {
   cat("\nSummary:\n")
   cat("  Successfully read:", length(successful_hours), "hours of data\n")
   if (length(failed_hours) > 0) {
-    cat("  Failed/Missing:", length(failed_hours), "hours:", failed_hours, "\n")
+    cat("  Failed/Missing:", length(failed_hours), "hours:", paste(failed_hours, collapse=", "), "\n")
   }
   
   # Combine all files
@@ -114,17 +131,107 @@ import_WOW_day <- function(date_string) {
       dplyr::bind_rows(all_data)
     })
     
-    return(combined_data%>%select(-SiteId,-Id,-UserId,-ImageBlobPath))
+    # 检查是否真的有数据
+    if (nrow(combined_data) == 0) {
+      cat("Warning: Combined data has 0 rows\n")
+      return(NULL)
+    }
+    
+    # Remove unnecessary columns based on year
+    if (year == "2021") {
+      # For 2021, remove columns that don't exist in JSON format
+      columns_to_remove <- c("SiteId", "Id", "ImageBlobPath")
+      combined_data <- combined_data %>%
+        select(-any_of(columns_to_remove))
+      
+      # Handle 2021's different datetime format
+      # LocalReportEndDateTime is in format like "15-07-2021 01:49:56"
+      combined_data <- combined_data %>%
+        mutate(
+          # Convert LocalReportEndDateTime to POSIXct
+          LocalReportEndDateTime = as.POSIXct(LocalReportEndDateTime, 
+                                            format = "%d-%m-%Y %H:%M:%S", 
+                                            tz = "Europe/Amsterdam"),
+          # Convert to UTC and create ReportEndDateTime if it doesn't exist
+          ReportEndDateTime = if("ReportEndDateTime" %in% names(.)) {
+            as.POSIXct(ReportEndDateTime, format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
+          } else {
+            # Convert local time to UTC
+            with_tz(LocalReportEndDateTime, "UTC")
+          },
+          # Handle CreatedDateTime
+          CreatedDateTime = as.POSIXct(CreatedDateTime, 
+                                     format = "%d-%m-%Y %H:%M:%S", 
+                                     tz = "Europe/Amsterdam") %>%
+                          with_tz("UTC")
+        )
+      
+      # If ReportStartDateTime doesn't exist, create it (10 minutes before ReportEndDateTime)
+      if (!"ReportStartDateTime" %in% names(combined_data)) {
+        combined_data <- combined_data %>%
+          mutate(ReportStartDateTime = ReportEndDateTime - 600) # 10 minutes
+      }
+      
+    } else {
+      # For 2022-2023, remove these columns if they exist
+      columns_to_remove <- c("SiteId", "Id", "UserId", "ImageBlobPath")
+      combined_data <- combined_data %>%
+        select(-any_of(columns_to_remove))
+      
+      # Convert time columns for 2022-2023 (ISO format with timezone)
+      combined_data <- combined_data %>%
+        mutate(
+          ReportStartDateTime = as.POSIXct(ReportStartDateTime, 
+                                         format = "%Y-%m-%dT%H:%M:%S", 
+                                         tz = "UTC"),
+          ReportEndDateTime = as.POSIXct(ReportEndDateTime, 
+                                       format = "%Y-%m-%dT%H:%M:%S", 
+                                       tz = "UTC"),
+          CreatedDateTime = as.POSIXct(CreatedDateTime, 
+                                     format = "%Y-%m-%dT%H:%M:%S", 
+                                     tz = "UTC")
+        )
+    }
+    
+    # Ensure we have consistent column names across years
+    # Remove LocalReportEndDateTime as we've converted it to UTC
+    combined_data <- combined_data %>%
+      select(-any_of("LocalReportEndDateTime"))
+    
+    cat("  Total rows:", nrow(combined_data), "\n")
+    cat("  Columns:", paste(names(combined_data)[1:min(10, length(names(combined_data)))], collapse=", "), 
+        if(length(names(combined_data)) > 10) "...\n" else "\n")
+    
+    return(combined_data)
+    
   } else {
     cat("No data successfully read\n")
     return(NULL)
   }
 }
 
-#usage
-data_20220715 <- import_WOW_day("2022-07-15")
+# 测试修正后的函数
+test_data <- import_WOW_day("2021-07-30")
 
-data_20220715
+# 如果还是有问题，可以直接检查文件夹内容
+list_wow_files <- function(date_string) {
+  parts <- strsplit(date_string, "-")[[1]]
+  year <- parts[1]
+  
+  if (year == "2021") {
+    folder <- here("data", paste0("WOW_", year))
+    files <- list.files(folder, pattern = paste0("WOW_NL_", gsub("-", "", date_string)), full.names = FALSE)
+    cat("Files found for", date_string, ":\n")
+    print(files)
+  }
+}
+
+# Test with both years
+data_2021 <- import_WOW_day("2021-07-22")
+data_2022 <- import_WOW_day("2022-07-05")
+
+data_2021
+data_2022
 ```
 
 #only return read from station close to target coord
@@ -142,15 +249,45 @@ import_WOW_nearest_stations <- function(date_string, target_lat, target_lon, n_s
     return(NULL)
   }
   
-  # Get unique stations and calculate distances
-  station_distances <- wow_data %>%
+  # Check which station ID column is available
+  station_id_col <- NULL
+  if ("ExternalSiteId" %in% names(wow_data)) {
+    station_id_col <- "ExternalSiteId"
+  } else if ("SiteId" %in% names(wow_data)) {
+    station_id_col <- "SiteId"
+  } else if ("StationId" %in% names(wow_data)) {
+    station_id_col <- "StationId"
+  } else if ("SiteName" %in% names(wow_data)) {
+    # For 2021 data, use SiteName as identifier
+    station_id_col <- "SiteName"
+  } else {
+    # If no ID column found, create one based on lat/lon combination
+    cat("Warning: No station ID column found. Creating ID from coordinates.\n")
+    wow_data <- wow_data %>%
+      mutate(StationId = paste(Latitude, Longitude, sep = "_"))
+    station_id_col <- "StationId"
+  }
+  
+  cat("Using", station_id_col, "as station identifier\n")
+  
+  # Rename the station ID column to a standard name for easier processing
+  wow_data <- wow_data %>%
+    rename(StationId = !!sym(station_id_col))
+  
+  # Get unique stations with their coordinates and calculate distances
+  station_info <- wow_data %>%
     mutate(
       Latitude = as.numeric(Latitude),
       Longitude = as.numeric(Longitude)
     ) %>%
     filter(!is.na(Latitude) & !is.na(Longitude)) %>%
-    select(Latitude, Longitude) %>%
-    distinct() %>%
+    group_by(StationId) %>%
+    summarise(
+      Latitude = first(Latitude),
+      Longitude = first(Longitude),
+      n_obs = n(),  # record how many observations per station
+      .groups = 'drop'
+    ) %>%
     mutate(
       distance_km = distHaversine(
         cbind(Longitude, Latitude),
@@ -158,39 +295,80 @@ import_WOW_nearest_stations <- function(date_string, target_lat, target_lon, n_s
       ) / 1000
     )
   
-  # Get coordinates of nearest n stations
-  nearest_coords <- station_distances %>%
+  # Check if we have any valid stations
+  if (nrow(station_info) == 0) {
+    cat("Error: No valid stations with coordinates found\n")
+    return(NULL)
+  }
+  
+  # Adjust n_stations if fewer stations are available
+  n_available <- min(n_stations, nrow(station_info))
+  if (n_available < n_stations) {
+    cat("Note: Only", n_available, "stations available (requested", n_stations, ")\n")
+  }
+  
+  # Get IDs of nearest n stations
+  nearest_station_ids <- station_info %>%
     arrange(distance_km) %>%
-    slice_head(n = n_stations) %>%
-    select(Latitude, Longitude)
+    slice_head(n = n_available) %>%
+    pull(StationId)
   
   # Filter original data to only include observations from nearest stations
   nearest_obs <- wow_data %>%
+    filter(StationId %in% nearest_station_ids) %>%
     mutate(
       Latitude = as.numeric(Latitude),
       Longitude = as.numeric(Longitude)
     ) %>%
-    inner_join(nearest_coords, by = c("Latitude", "Longitude")) %>%
     # Add distance information
+    left_join(
+      station_info %>% select(StationId, distance_km),
+      by = "StationId"
+    ) %>%
+    rename(distance_to_target_km = distance_km) %>%
     mutate(
-      distance_to_target_km = distHaversine(
-        cbind(Longitude, Latitude),
-        cbind(target_lon, target_lat)
-      ) / 1000,
       target_lat = target_lat,
       target_lon = target_lon
     ) %>%
     arrange(distance_to_target_km, ReportEndDateTime)
   
-  cat("Found", nrow(nearest_obs), "observations from", n_stations, "nearest stations\n")
-  cat("Distance range:", round(min(nearest_obs$distance_to_target_km), 2), "-", 
-      round(max(nearest_obs$distance_to_target_km), 2), "km\n")
+  # Rename StationId back to original column name if needed
+  if (station_id_col != "StationId") {
+    nearest_obs <- nearest_obs %>%
+      rename(!!sym(station_id_col) := StationId)
+  }
+  
+  # Print summary
+  cat("\nSummary for", date_string, "\n")
+  cat("Found", nrow(nearest_obs), "observations from", n_available, "nearest stations\n")
+  
+  if (nrow(nearest_obs) > 0) {
+    cat("Distance range:", round(min(nearest_obs$distance_to_target_km), 2), "-", 
+        round(max(nearest_obs$distance_to_target_km), 2), "km\n")
+    
+    # Show station details
+    station_summary <- nearest_obs %>%
+      group_by(!!sym(station_id_col), distance_to_target_km) %>%
+      summarise(
+        observations = n(),
+        .groups = 'drop'
+      ) %>%
+      arrange(distance_to_target_km)
+    
+    cat("\nStation details:\n")
+    print(station_summary)
+  }
   
   return(nearest_obs)
 }
 
-amsterdam_stations <- import_WOW_nearest_stations("2022-07-15", 52.37, 4.90, n_stations = 5)
-amsterdam_stations
+# Test with both years
+amsterdam_stations_2021 <- import_WOW_nearest_stations("2021-01-31", 52.37, 4.90, n_stations = 5)
+amsterdam_stations_2022 <- import_WOW_nearest_stations("2022-07-15", 52.37, 4.90, n_stations = 5)
+
+amsterdam_stations_2021
+amsterdam_stations_2022
+
 #####time is not continuous
 ```
 
@@ -203,8 +381,9 @@ get_unique_wow_stations <- function(date_str) {
   
   # extract station info
   unique_stations <- data_day %>%
-    select(Latitude, Longitude, Height) %>%
+    select(ExternalSiteId,Latitude, Longitude, Height) %>%
     mutate(
+      site_id = ExternalSiteId,
       Latitude = as.numeric(Latitude),
       Longitude = as.numeric(Longitude),
       Height = as.numeric(Height)
@@ -213,9 +392,9 @@ get_unique_wow_stations <- function(date_str) {
   return(unique_stations)
 }
 
-wow_stations_20210102 <- get_unique_wow_stations("2022-07-15")
+unique_stations <- get_unique_wow_stations("2022-07-15")
 
-wow_stations_20210102
+unique_stations
 ```
 
 
