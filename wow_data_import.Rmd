@@ -210,21 +210,6 @@ import_WOW_day <- function(date_string) {
   }
 }
 
-# 测试修正后的函数
-test_data <- import_WOW_day("2021-07-30")
-
-# 如果还是有问题，可以直接检查文件夹内容
-list_wow_files <- function(date_string) {
-  parts <- strsplit(date_string, "-")[[1]]
-  year <- parts[1]
-  
-  if (year == "2021") {
-    folder <- here("data", paste0("WOW_", year))
-    files <- list.files(folder, pattern = paste0("WOW_NL_", gsub("-", "", date_string)), full.names = FALSE)
-    cat("Files found for", date_string, ":\n")
-    print(files)
-  }
-}
 
 # Test with both years
 data_2021 <- import_WOW_day("2021-07-22")

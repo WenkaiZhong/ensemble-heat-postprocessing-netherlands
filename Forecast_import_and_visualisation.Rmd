@@ -128,10 +128,10 @@ read_data <- function(year, var_type, data_dir = here("data", "ToSend-01-20-2025
 }
 
 # Test
-temp_2021 <- read_data(2021, "2t")  # Read combined_raw_2t_2021.nc
+temp_2023 <- read_data(2023, "2t")  # Read combined_raw_2t_2021.nc
 dewp_2021 <- read_data(2021, "2d")  # Read combined_raw_2d_2021.nc
-temp_2021_start_time <- temp_2021$runtime_units
-temp_2021_start_time
+temp_2023_start_time <- temp_2023$runtime_units
+temp_2023_start_time
 dewp_2021_start_time <- dewp_2021$runtime_units
 dewp_2021_start_time
 ```
@@ -182,8 +182,11 @@ tidy_formation <- function(data, gridpoint_idx, validtime_idx) {
 
 # Example usage and verification
 # # Convert specific validtime to tidy format
-temp_example_day <- tidy_formation(temp_2021, gridpoint_idx = 1, validtime_idx = 1)
+temp_example_day <- tidy_formation(temp_2023, gridpoint_idx = 1, validtime_idx = 1)
 temp_example_day
+
+dewp_example_day <- tidy_formation(dewp_2021, gridpoint_idx = 1, validtime_idx = 1)
+dewp_example_day
 ```
 
 ##function that we only input forecats_time and gridpoint to generate tidy forecast table
@@ -253,10 +256,14 @@ find_runtime_index <- function(data, target_datetime) {
 
 # Test examples
 # Test 1: Find specific forecast with time
-test1 <- find_runtime_index(temp_2021, "2021-01-31 00:00:00")
-test2 <- find_runtime_index(temp_2021, "2021-01-31 12:00:00")
-
-
+test1 <- find_runtime_index(temp_2023, "2023-01-21 00:00:00")
+test2 <- find_runtime_index(temp_2023, "2023-01-21 12:00:00")
+test3 <- find_runtime_index(dewp_2021, "2021-05-17 00:00:00")
+test4 <- find_runtime_index(dewp_2021, "2021-01-31 00:00:00")
+test1 
+test2 
+test3 
+test4 
 
 find_gridpoint_index <- function(data, gridpoint_id) {
   idx <- which(data$gridpoint == gridpoint_id)
@@ -266,59 +273,58 @@ find_gridpoint_index <- function(data, gridpoint_id) {
   return(idx)
 }
 
-test3 = find_gridpoint_index(temp_2021, 605)
-test3
+test_grid_1 = find_gridpoint_index(temp_2023, 605)
+test_grid_1
+test_grid_2 = find_gridpoint_index(dewp_2021, 605)
+test_grid_2
 
 ```
 
 #check forecasts that be made in a specific date
 ```{r}
 
-# Main function!
-# Example: tidy_result_2021_08_13_G605 <- tidy_table_ultimate("2021-08-13", 605)
-tidy_table_ultimate <- function(forecast_datetime, gridpoint_id, temp_data = NULL, dewp_data = NULL) {
-  # Use default data if not provided
-  if (is.null(temp_data)) temp_data <- temp_2021
-  if (is.null(dewp_data)) dewp_data <- dewp_2021
+# Main function
+tidy_table_ultimate <- function(forecast_datetime, gridpoint_id) {
+  # Find relative data set
+  year <- lubridate::year(as.POSIXct(forecast_datetime))
   
-  # Step 1: Find the runtime index for the specified datetime
-  runtime_idx <- find_runtime_index(temp_data, forecast_datetime)
+  temp_data <- read_data(year, "2t")
+  dewp_data <- read_data(year, "2t")
   
-  # Check if we got a unique index
-  if (length(runtime_idx) > 1) {
-    stop(paste("Multiple forecasts found for", forecast_datetime, 
-               ". Please specify time (e.g., '2021-01-31 00:00:00')"))
+  # Step 1: Find the runtime index for temperature and dewpoint
+  runtime_temp_idx <- find_runtime_index(temp_data, forecast_datetime)
+  runtime_dewp_idx <- find_runtime_index(dewp_data, forecast_datetime)
+  
+  # Check if unique runtime index was found
+  if (length(runtime_temp_idx) != 1 || length(runtime_dewp_idx) != 1) {
+    stop(paste("Could not uniquely identify forecast time", forecast_datetime, 
+               "in one or both datasets. Please check time format and data."))
   }
   
   # Step 2: Find the gridpoint index
-  grid_idx <- find_gridpoint_index(temp_data, gridpoint_id)
+  grid_idx_temp <- find_gridpoint_index(temp_data, gridpoint_id)
+  grid_idx_dewp <- find_gridpoint_index(dewp_data, gridpoint_id)
   
-  # Step 3: Get temperature data using tidy_formation
-  temp_tidy <- tidy_formation(temp_data, grid_idx, runtime_idx)
+  # Step 3: Extract tidy data
+  temp_tidy <- tidy_formation(temp_data, grid_idx_temp, runtime_temp_idx)
+  dewp_tidy <- tidy_formation(dewp_data, grid_idx_dewp, runtime_dewp_idx)
   
-  # Step 4: Get dewpoint data using tidy_formation
-  # Assuming dewpoint data has the same structure
-  dewp_tidy <- tidy_formation(dewp_data, grid_idx, runtime_idx)
-  
-  # Step 5: Combine temperature and dewpoint data
+  # Step 4: Combine and format
   tidy_combined <- temp_tidy %>%
-    # Rename temperature column
     rename(Temperature_K = Forecast_value) %>%
-    # Add dewpoint data
     mutate(
       DewPoint_K = dewp_tidy$Forecast_value,
       # Convert to Celsius
       Temperature_C = Temperature_K - 273.15,
       DewPoint_C = DewPoint_K - 273.15,
-      # Add forecast date and time info
+      # Add time information
       Forecast_init_date = as.Date(Forecast_init_datetime),
       Forecast_init_time = format(Forecast_init_datetime, "%H:%M:%S"),
       Valid_date = as.Date(Valid_datetime),
       Valid_time = format(Valid_datetime, "%H:%M:%S"),
-      # Add gridpoint ID to the output
+      # Gridpoint ID
       Gridpoint_ID = gridpoint_id
     ) %>%
-    # Reorder columns for clarity
     select(
       Member, 
       lead_time_hrs,
@@ -333,15 +339,15 @@ tidy_table_ultimate <- function(forecast_datetime, gridpoint_id, temp_data = NUL
       DewPoint_K,
       DewPoint_C,
       Gridpoint_ID,
-      Gridpoint,
       everything()
     )
   
   return(tidy_combined)
 }
 
+
 # Test the function
-tidy_result_2021_01_31_00_G605 <- tidy_table_ultimate("2021-01-31 00:00:00", 605)
+tidy_result_2021_01_31_00_G605 <- tidy_table_ultimate("2021-05-17 00:00:00", 605)
 tidy_result_2021_01_31_00_G605
 # View the first few rows
 head(tidy_result_2021_01_31_00_G605)
@@ -351,8 +357,8 @@ str(tidy_result_2021_01_31_00_G605)
 
 # Test with different dates and times
 tidy_result_2021_01_31_12_G605 <- tidy_table_ultimate("2021-01-31 12:00:00", 605)
-tidy_result_2021_08_13_00_G605 <- tidy_table_ultimate("2021-08-13 00:00:00", 605)
-
+tidy_result_2021_08_13_00_G605 <- tidy_table_ultimate("2023-01-21 00:00:00", 605)
+tidy_result_2021_08_13_00_G605
 ```
 
 
@@ -479,7 +485,7 @@ tidy_forecast_with_station_grid_location <- function(target_datetime, gridpoint_
 
 # Test with specific datetime
 tidy_result_2021_08_13_12_G605 <- tidy_forecast_with_station_grid_location(
-  "2021-08-13 12:00:00", 
+  "2021-05-17 00:00:00", 
   605
 )
 

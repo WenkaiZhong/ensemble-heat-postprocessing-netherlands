@@ -323,11 +323,33 @@ plot_city_station_connections <- function(city_connections_data, selected_cities
 map_all <- plot_city_station_connections(city_connections_summer)
 print(map_all)
 ```
+#function to calcualte humudity and wet bulb  temprature
+```{r}
+e <- function(T) {
+  6.112 * exp((17.67 * T) / (T + 243.5))
+}
+
+get_rh <- function(temp_C, dew_C) {
+  100 * e(dew_C) / e(temp_C)
+}
+
+#stull equation
+get_wbt <- function(temp_C, RH) {
+  RH <- pmax(pmin(RH, 100), 1)
+  T <- temp_C
+  T_w <- T * atan(0.151977 * sqrt(RH + 8.313659)) +
+         atan(T + RH) -
+         atan(RH - 1.676331) +
+         0.00391838 * RH^(3/2) * atan(0.023101 * RH) -
+         4.686035
+  return(T_w)
+}
+```
 
 
 #combine forecast with obs
 ```{r}
-combine_forecast_obs_wow <- function(date_str, 
+combine_forecast_obs <- function(date_str, 
                                gridpoint_id, 
                                lead_time_hours = NULL,
                                aggregate_obs = "hourly",
@@ -397,443 +419,162 @@ combine_forecast_obs_wow <- function(date_str,
      suffix = c("_forecast", "_obs")
    )
  
+ #add humudity 
+ combined_data <- combined_data %>%
+  mutate(
+    Relative_humidity_pct = get_rh(Temperature_C,DewPoint_C),
+    RH_10 = get_rh(T_DRYB_10,T_DEWP_10)
+  )%>%
+ relocate(Relative_humidity_pct, .before = Gridpoint_ID)%>%
+ relocate(RH_10, .before = U_10)
+  
  return(combined_data)
 }
 
 # Usage example
-combined <- combine_forecast_obs_wow("2021-01-31 12:00:00", 605)
+combined <- combine_forecast_obs("2021-01-31 12:00:00", 605)
 combined
 ```
-
-#Combined visualisation funtion
-```{r}
-forecast_add_obs_line <- function(forecast_datetime, 
-                                gridpoint_id, 
-                                variable = "Temperature_C", 
-                                members = 1:51,
-                                temp_data = NULL,
-                                dewp_data = NULL,
-                                station_table = NULL) {
-  
-  # Variable mapping for observations
-  var_mapping <- list(
-    "Temperature_C" = "T_DRYB_10",
-    "DewPoint_C" = "T_DEWP_10"
-  )
-  
-  obs_var_name <- var_mapping[[variable]]
-  if (is.null(obs_var_name)) {
-    stop(paste("Invalid variable:", variable, 
-               ". Valid options are:", paste(names(var_mapping), collapse = ", ")))
-  }
-  
-  # Get the combined forecast and observation data
-  combined <- combine_forecast_obs_wow(
-    date_str = forecast_datetime, 
-    gridpoint_id = gridpoint_id
-  )
-  
-  if (is.null(combined) || nrow(combined) == 0) {
-    warning(paste("No combined data found for", forecast_datetime, "at gridpoint", gridpoint_id))
-    return(NULL)
-  }
-  
-  # Filter for selected members
-  member_names <- paste0("M", members)
-  plot_data <- combined %>%
-    filter(Member %in% member_names)
-  
-  # Create the plot
-  p <- ggplot(plot_data, aes(x = lead_time_hrs, y = .data[[variable]]))
-  
-  # Check number of members
-  n_members <- length(members)
-  
-  # Add forecast lines
-  if (n_members <= 10) {
-    # Use colors that don't include red (reserved for observations)
-    forecast_colors <- c("blue", "darkgreen", "purple", "orange", "brown", 
-                        "pink", "gold", "cyan", "magenta", "gray")[1:n_members]
-    p <- p + 
-      geom_line(aes(color = Member, group = Member), 
-                size = 0.8, alpha = 0.8) +
-      scale_color_manual(
-        name = "Ensemble",
-        values = forecast_colors
-      )
-  } else {
-    # Gray spaghetti plot for many members
-    p <- p + 
-      geom_line(aes(group = Member), 
-                alpha = 0.3, color = "gray50", size = 0.3) +
-      # Add ensemble mean
-      stat_summary(fun = mean, geom = "line", 
-                   color = "black", size = 1, alpha = 0.9)
-  }
-  
-  # Add observation line - check if observation data exists
-  if (obs_var_name %in% names(plot_data) && !all(is.na(plot_data[[obs_var_name]]))) {
-    p <- p + 
-      geom_line(aes(y = .data[[obs_var_name]]), 
-                color = "red", 
-                size = 1.5, 
-                alpha = 1,
-                na.rm = TRUE) +
-      geom_point(aes(y = .data[[obs_var_name]]), 
-                 color = "darkred", 
-                 size = 2, 
-                 alpha = 0.8,
-                 na.rm = TRUE)
-  } else {
-    warning(paste("No observation data found for variable:", obs_var_name))
-  }
-  
-  # Add labels and theme
-  station_info <- unique(plot_data$station_id)[1]
-  p <- p +
-    labs(
-      title = paste("Forecast vs Observations -", 
-                    format(unique(plot_data$Forecast_init_datetime)[1], "%Y-%m-%d %H:%M UTC")),
-      subtitle = paste("Gridpoint", gridpoint_id, "| Station:", station_info, 
-                      "| Members:", n_members, "| Red: Observations"),
-      x = "Lead Time (hours)",
-      y = ifelse(variable == "Temperature_C", "Temperature (°C)", 
-                 ifelse(variable == "DewPoint_C", "Dew Point (°C)", variable))
-    ) +
-    theme_minimal() +
-    theme(
-      plot.title = element_text(size = 14, face = "bold"),
-      plot.subtitle = element_text(size = 12, color = "gray40"),
-      legend.position = if(n_members <= 10) "right" else "none",
-      panel.grid.minor = element_blank()
-    ) +
-    scale_x_continuous(breaks = seq(0, 240, 24)) +
-    coord_cartesian(xlim = c(0, 240))
-  
-  # Add reference lines for days
-  p <- p +
-    geom_vline(xintercept = seq(24, 240, 24), alpha = 0.2, linetype = "dashed")
-  
-  return(p)
-}
-
-# Enhanced version with error statistics
-forecast_add_obs_with_stats <- function(forecast_datetime, 
-                                      gridpoint_id, 
-                                      variable = "Temperature_C", 
-                                      members = 1:51,
-                                      show_error_band = TRUE) {
-  
-  # Variable mapping
-  var_mapping <- list(
-    "Temperature_C" = "T_DRYB_10",
-    "DewPoint_C" = "T_DEWP_10"
-  )
-  
-  obs_var_name <- var_mapping[[variable]]
-  
-  # Get combined data
-  combined <- combine_forecast_obs_wow(forecast_datetime, gridpoint_id)
-  
-  if (is.null(combined) || nrow(combined) == 0) {
-    stop("No data found")
-  }
-  
-  # Filter members
-  member_names <- paste0("M", members)
-  plot_data <- combined %>%
-    filter(Member %in% member_names)
-  
-  # Calculate ensemble statistics
-  ensemble_stats <- plot_data %>%
-    group_by(lead_time_hrs) %>%
-    summarise(
-      ensemble_mean = mean(.data[[variable]], na.rm = TRUE),
-      ensemble_median = median(.data[[variable]], na.rm = TRUE),
-      ensemble_q25 = quantile(.data[[variable]], 0.25, na.rm = TRUE),
-      ensemble_q75 = quantile(.data[[variable]], 0.75, na.rm = TRUE),
-      ensemble_q10 = quantile(.data[[variable]], 0.1, na.rm = TRUE),
-      ensemble_q90 = quantile(.data[[variable]], 0.9, na.rm = TRUE),
-      obs_value = first(.data[[obs_var_name]]),
-      .groups = "drop"
-    )
-  
-  # Create plot
-  p <- ggplot()
-  
-  # Add error bands if requested
-  if (show_error_band) {
-    p <- p +
-      geom_ribbon(data = ensemble_stats,
-                  aes(x = lead_time_hrs, ymin = ensemble_q10, ymax = ensemble_q90),
-                  fill = "lightblue", alpha = 0.3) +
-      geom_ribbon(data = ensemble_stats,
-                  aes(x = lead_time_hrs, ymin = ensemble_q25, ymax = ensemble_q75),
-                  fill = "blue", alpha = 0.3)
-  }
-  
-  # Add individual members if not too many
-  if (length(members) <= 20) {
-    p <- p +
-      geom_line(data = plot_data,
-                aes(x = lead_time_hrs, y = .data[[variable]], group = Member),
-                alpha = 0.3, color = "gray50", size = 0.3)
-  }
-  
-  # Add ensemble mean and median
-  p <- p +
-    geom_line(data = ensemble_stats,
-              aes(x = lead_time_hrs, y = ensemble_mean),
-              color = "blue", size = 1.2) +
-    geom_line(data = ensemble_stats,
-              aes(x = lead_time_hrs, y = ensemble_median),
-              color = "darkblue", size = 1, linetype = "dashed")
-  
-  # Add observations
-  p <- p +
-    geom_line(data = ensemble_stats,
-              aes(x = lead_time_hrs, y = obs_value),
-              color = "red", size = 1.5, na.rm = TRUE) +
-    geom_point(data = ensemble_stats,
-               aes(x = lead_time_hrs, y = obs_value),
-               color = "darkred", size = 2, na.rm = TRUE)
-  
-  # Labels and theme
-  p <- p +
-    labs(
-      title = paste("Forecast vs Observations -", 
-                    format(as.POSIXct(forecast_datetime), "%Y-%m-%d %H:%M UTC")),
-      subtitle = paste("Blue: Ensemble mean/median | Red: Observations | Shading: 10-90% & 25-75% intervals"),
-      x = "Lead Time (hours)",
-      y = ifelse(variable == "Temperature_C", "Temperature (°C)", variable)
-    ) +
-    theme_minimal() +
-    scale_x_continuous(breaks = seq(0, 240, 24))
-  
-  return(p)
-}
-
-# Usage examples:
-# Basic plot
-p1 <- forecast_add_obs_line(
-  forecast_datetime = "2021-02-02 00:00:00",
-  gridpoint_id = 605
-)
-print(p1)
-
-# With error statistics
-p2 <- forecast_add_obs_with_stats(
-  forecast_datetime = "2021-02-01 00:00:00",
-  gridpoint_id = 605,
-  variable = "Temperature_C",
-  show_error_band = TRUE
-)
-print(p2)
-
-
-```
-
 
 ##############################combine all data (WOW,official,forecast)#######################################
 
 ```{r}
 combine_forecast_obs_wow <- function(date_str, 
-                               gridpoint_id, 
-                               lead_time_hours = NULL,
-                               aggregate_obs = "hourly",
-                               include_metadata = TRUE,
-                               n_wow_stations = 5) {  # 添加参数控制WOW站点数量
- 
- # Get forecast data for the specified date and gridpoint
- forecast_data <- tidy_forecast_with_station_grid_location(date_str, gridpoint_id)
- 
- # Extract gridpoint coordinates for WOW station search
- gridpoint_lat <- unique(forecast_data$gridpoint_lat)[1]
- gridpoint_lon <- unique(forecast_data$gridpoint_lon)[1]
- 
- ####### Import observation data for 10 days starting from date_str
- # Convert date_str to Date object
- start_date <- as.Date(date_str)
- 
- # Initialize list to store observation data
- all_obs_data <- list()
- all_wow_data <- list()  # 添加WOW数据存储
- 
- # Loop through 10 days
- for (i in 0:9) {
-   current_date <- start_date + i
-   current_date_str <- format(current_date, "%Y-%m-%d")
-   
-   # Import KNMI observation data
-   tryCatch({
-     daily_obs <- import_knmi_data(current_date_str)
-     all_obs_data[[current_date_str]] <- daily_obs
-   }, error = function(e) {
-     warning(paste("Failed to import KNMI data for", current_date_str))
-   })
-   
-   # Import WOW data for nearest stations
-   tryCatch({
-     wow_obs <- import_WOW_nearest_stations(
-       current_date_str, 
-       gridpoint_lat, 
-       gridpoint_lon, 
-       n_stations = n_wow_stations
-     )
-     if (!is.null(wow_obs)) {
-       all_wow_data[[current_date_str]] <- wow_obs
-     }
-   }, error = function(e) {
-     warning(paste("Failed to import WOW data for", current_date_str))
-   })
- }
- 
- # Combine all observation data
- if (length(all_obs_data) > 0) {
-   obs_data <- bind_rows(all_obs_data)
- } else {
-   warning("No observation data found for any date")
-   return(forecast_data)
- }
- 
- # Process WOW data if available
- wow_aggregated <- NULL
- if (length(all_wow_data) > 0) {
-   wow_combined <- bind_rows(all_wow_data)
-   
-   # Detect which station ID column is present
-   station_id_col <- NULL
-   if ("ExternalSiteId" %in% names(wow_combined)) {
-     station_id_col <- "ExternalSiteId"
-   } else if ("SiteId" %in% names(wow_combined)) {
-     station_id_col <- "SiteId"
-   } else if ("SiteName" %in% names(wow_combined)) {
-     station_id_col <- "SiteName"
-   } else if ("StationId" %in% names(wow_combined)) {
-     station_id_col <- "StationId"
-   } else {
-     # Create a station ID based on coordinates if no ID column exists
-     wow_combined <- wow_combined %>%
-       mutate(StationId = paste(Latitude, Longitude, sep = "_"))
-     station_id_col <- "StationId"
-   }
-   
-   # Aggregate WOW data by hour (matching forecast temporal resolution)
-   wow_aggregated <- wow_combined %>%
-     # Round to nearest hour for aggregation
-     mutate(
-       Valid_datetime = floor_date(ReportEndDateTime, "hour"),
-       # Convert temperature and humidity columns to numeric
-       DryBulbTemperature_Celsius = as.numeric(DryBulbTemperature_Celsius),
-       RelativeHumidity = as.numeric(RelativeHumidity),
-       DewPointTemperature_Celsius = as.numeric(DewPointTemperature_Celsius)
-     ) %>%
-     # Group by hour and calculate mean across all stations
-     group_by(Valid_datetime) %>%
-     summarise(
-       wow_temp_mean = mean(DryBulbTemperature_Celsius, na.rm = TRUE),
-       wow_temp_sd = sd(DryBulbTemperature_Celsius, na.rm = TRUE),
-       wow_temp_min = min(DryBulbTemperature_Celsius, na.rm = TRUE),
-       wow_temp_max = max(DryBulbTemperature_Celsius, na.rm = TRUE),
-       wow_humidity_mean = mean(RelativeHumidity, na.rm = TRUE),
-       wow_dewpoint_mean = mean(DewPointTemperature_Celsius, na.rm = TRUE),
-       wow_n_stations = n_distinct(!!sym(station_id_col)),  # 使用动态列名
-       wow_n_obs = n(),
-       .groups = 'drop'
-     ) %>%
-     # Clean up infinite values from empty groups
-     mutate(across(where(is.numeric), ~ifelse(is.infinite(.), NA, .)))
-   
-   # Calculate wet bulb temperature using Stull (2011) approximation
-   wow_aggregated <- wow_aggregated %>%
-     mutate(
-       wow_wetbulb_mean = case_when(
-         !is.na(wow_temp_mean) & !is.na(wow_humidity_mean) ~ 
-           wow_temp_mean * atan(0.151977 * sqrt(wow_humidity_mean + 8.313659)) + 
-           atan(wow_temp_mean + wow_humidity_mean) - 
-           atan(wow_humidity_mean - 1.676331) + 
-           0.00391838 * wow_humidity_mean^(3/2) * atan(0.023101 * wow_humidity_mean) - 
-           4.686035,
-         TRUE ~ NA_real_
-       )
-     )
- }
- 
- # Extract station_id from forecast data
- station_id <- unique(forecast_data$station_id)
- 
- # Check if station_id exists
- if(is.na(station_id) || length(station_id) == 0) {
-   warning("No station_id found for this gridpoint")
-   return(forecast_data)
- }
- 
- # Filter observation data for the specific station
- pattern <- paste0("^", station_id, "_")
- 
- obs_filtered <- obs_data %>%
-   filter(grepl(pattern, LOCATION)) %>%
-   # Convert DTG to POSIXct to match forecast data format
-   mutate(DTG = as.POSIXct(DTG, tz = "UTC"))
- 
- # Check if any observations found
- if(nrow(obs_filtered) == 0) {
-   warning(paste("No observations found for station", station_id))
-   return(forecast_data)
- }
- 
- # Ensure Valid_datetime is POSIXct
- forecast_data$Valid_datetime <- as.POSIXct(forecast_data$Valid_datetime, tz = "UTC")
- 
- # Join observation data to forecast data
- combined_data <- forecast_data %>%
-   left_join(
-     obs_filtered,
-     by = c("Valid_datetime" = "DTG"),
-     suffix = c("_forecast", "_obs")
-   )
- 
- # Join WOW data if available
- if (!is.null(wow_aggregated)) {
-   combined_data <- combined_data %>%
-     left_join(
-       wow_aggregated,
-       by = "Valid_datetime"
-     )
-   
-   # Add summary info
-   cat("\nWOW data summary:\n")
-   cat("Total WOW observations included:", sum(wow_aggregated$wow_n_obs, na.rm = TRUE), "\n")
-   cat("Average stations per hour:", round(mean(wow_aggregated$wow_n_stations, na.rm = TRUE), 1), "\n")
-   cat("Temperature coverage:", 
-       round(sum(!is.na(wow_aggregated$wow_temp_mean)) / nrow(wow_aggregated) * 100, 1), 
-       "% of hours\n")
-   cat("Wet bulb temperature coverage:", 
-       round(sum(!is.na(wow_aggregated$wow_wetbulb_mean)) / nrow(wow_aggregated) * 100, 1), 
-       "% of hours\n")
- }
- 
- # Add diagnostic information
- cat("\nForecast period:", min(forecast_data$Valid_datetime), "to", max(forecast_data$Valid_datetime), "\n")
- cat("Grid point:", gridpoint_id, "at", round(gridpoint_lat, 2), "N,", round(gridpoint_lon, 2), "E\n")
- cat("Official station:", station_id, "\n")
- 
- return(combined_data)
+                                     gridpoint_id, 
+                                     lead_time_hours = NULL,
+                                     aggregate_obs = "hourly",
+                                     include_metadata = TRUE,
+                                     n_wow_stations = 5) {
+
+  # Step 1: Use existing function to get forecast + KNMI obs + RH columns
+  combined_data <- combine_forecast_obs(
+    date_str = date_str,
+    gridpoint_id = gridpoint_id,
+    lead_time_hours = lead_time_hours,
+    aggregate_obs = aggregate_obs,
+    include_metadata = include_metadata
+  )
+
+  # Step 2: Extract gridpoint coordinates for WOW search
+  gridpoint_lat <- unique(combined_data$gridpoint_lat)[1]
+  gridpoint_lon <- unique(combined_data$gridpoint_lon)[1]
+
+  # Step 3: Import WOW data over 10 days
+  start_date <- as.Date(date_str)
+  all_wow_data <- list()
+
+  for (i in 0:9) {
+    current_date <- start_date + i
+    current_date_str <- format(current_date, "%Y-%m-%d")
+
+    tryCatch({
+      wow_obs <- import_WOW_nearest_stations(
+        current_date_str, 
+        gridpoint_lat, 
+        gridpoint_lon, 
+        n_stations = n_wow_stations
+      )
+      if (!is.null(wow_obs)) {
+        all_wow_data[[current_date_str]] <- wow_obs
+      }
+    }, error = function(e) {
+      warning(paste("Failed to import WOW data for", current_date_str))
+    })
+  }
+
+  # Step 4: Process WOW data
+  if (length(all_wow_data) > 0) {
+    wow_combined <- bind_rows(all_wow_data)
+
+    # Detect station ID column
+    station_id_col <- NULL
+    if ("ExternalSiteId" %in% names(wow_combined)) {
+      station_id_col <- "ExternalSiteId"
+    } else if ("SiteId" %in% names(wow_combined)) {
+      station_id_col <- "SiteId"
+    } else if ("SiteName" %in% names(wow_combined)) {
+      station_id_col <- "SiteName"
+    } else if ("StationId" %in% names(wow_combined)) {
+      station_id_col <- "StationId"
+    } else {
+      wow_combined <- wow_combined %>%
+        mutate(StationId = paste(Latitude, Longitude, sep = "_"))
+      station_id_col <- "StationId"
+    }
+
+    # Step 5: Aggregate WOW data
+    wow_aggregated <- wow_combined %>%
+      mutate(
+        Valid_datetime = floor_date(ReportEndDateTime, "hour"),
+        DryBulbTemperature_Celsius = as.numeric(DryBulbTemperature_Celsius),
+        RelativeHumidity = as.numeric(RelativeHumidity),
+        DewPointTemperature_Celsius = as.numeric(DewPointTemperature_Celsius)
+      ) %>%
+      group_by(Valid_datetime) %>%
+      summarise(
+        wow_temp_mean = mean(DryBulbTemperature_Celsius, na.rm = TRUE),
+        wow_temp_sd = sd(DryBulbTemperature_Celsius, na.rm = TRUE),
+        wow_temp_min = min(DryBulbTemperature_Celsius, na.rm = TRUE),
+        wow_temp_max = max(DryBulbTemperature_Celsius, na.rm = TRUE),
+        wow_humidity_mean = mean(RelativeHumidity, na.rm = TRUE),
+        wow_dewpoint_mean = mean(DewPointTemperature_Celsius, na.rm = TRUE),
+        wow_n_stations = n_distinct(!!sym(station_id_col)),
+        wow_n_obs = n(),
+        .groups = "drop"
+      ) %>%
+      mutate(across(where(is.numeric), ~ifelse(is.infinite(.), NA, .))) %>%
+      mutate(
+        wow_wetbulb_mean = case_when(
+          !is.na(wow_temp_mean) & !is.na(wow_humidity_mean) ~ 
+            wow_temp_mean * atan(0.151977 * sqrt(wow_humidity_mean + 8.313659)) + 
+            atan(wow_temp_mean + wow_humidity_mean) - 
+            atan(wow_humidity_mean - 1.676331) + 
+            0.00391838 * wow_humidity_mean^(3/2) * atan(0.023101 * wow_humidity_mean) - 
+            4.686035,
+          TRUE ~ NA_real_
+        )
+      )
+
+    # Step 6: Join WOW data to combined forecast+obs
+    combined_data <- combined_data %>%
+      left_join(wow_aggregated, by = "Valid_datetime")
+
+    # Summary
+    cat("\nWOW data summary:\n")
+    cat("Total WOW observations included:", sum(wow_aggregated$wow_n_obs, na.rm = TRUE), "\n")
+    cat("Average stations per hour:", round(mean(wow_aggregated$wow_n_stations, na.rm = TRUE), 1), "\n")
+    cat("Temperature coverage:", 
+        round(sum(!is.na(wow_aggregated$wow_temp_mean)) / nrow(wow_aggregated) * 100, 1), 
+        "% of hours\n")
+    cat("Wet bulb temperature coverage:", 
+        round(sum(!is.na(wow_aggregated$wow_wetbulb_mean)) / nrow(wow_aggregated) * 100, 1), 
+        "% of hours\n")
+  }
+
+  # Final metadata
+  cat("\nForecast period:", min(combined_data$Valid_datetime), "to", max(combined_data$Valid_datetime), "\n")
+  cat("Grid point:", gridpoint_id, "at", round(gridpoint_lat, 2), "N,", round(gridpoint_lon, 2), "E\n")
+  cat("Official station:", unique(combined_data$station_id)[1], "\n")
+
+  return(combined_data)
 }
 
 # Usage example
 combined <- combine_forecast_obs_wow("2021-01-31 12:00:00", 605, n_wow_stations = 5)
 combined
+
+
+combined2 <- combine_forecast_obs_wow("2022-01-28 00:00:00", 605, n_wow_stations = 5)
+combined2
 ```
 #data combination visualisation !!!!!!!!!!!!!!!!!!!!!!!!!!
 ```{r}
-plot_forecast_obs_wow_comparison <- function(forecast_datetime, 
+plot_forecast_obs_wow_spaghetti <- function(forecast_datetime, 
                                             gridpoint_id, 
                                             variable = "Temperature_C", 
                                             members = 1:51,
                                             n_wow_stations = 5,
-                                            show_error_band = TRUE,
-                                            show_individual_members = FALSE) {
+                                            show_mean = FALSE) {
   
   # Variable mapping for available data
   var_mapping <- list(
@@ -841,14 +582,12 @@ plot_forecast_obs_wow_comparison <- function(forecast_datetime,
       forecast = "Temperature_C",
       obs = "T_DRYB_10",
       wow = "wow_temp_mean",
-      wow_sd = "wow_temp_sd",
       label = "Temperature (°C)"
     ),
     "Humidity_pct" = list(
-      forecast = "Relative_humidity_pct",  # Check the actual column name in your forecast data
+      forecast = "Relative_humidity_pct",  
       obs = "RH_10",
       wow = "wow_humidity_mean",
-      wow_sd = NULL,  # We didn't calculate SD for humidity
       label = "Relative Humidity (%)"
     )
   )
@@ -862,7 +601,6 @@ plot_forecast_obs_wow_comparison <- function(forecast_datetime,
   forecast_var_name <- var_info$forecast
   obs_var_name <- var_info$obs
   wow_var_name <- var_info$wow
-  wow_sd_name <- var_info$wow_sd
   y_label <- var_info$label
   
   # Get the combined forecast, official obs, and WOW data
@@ -889,90 +627,60 @@ plot_forecast_obs_wow_comparison <- function(forecast_datetime,
   plot_data <- combined %>%
     filter(Member %in% member_names)
   
-  # Calculate ensemble statistics
-  ensemble_stats <- plot_data %>%
+  # Get observation data (take first value per lead time)
+  obs_data <- plot_data %>%
     group_by(lead_time_hrs) %>%
     summarise(
-      ensemble_mean = mean(.data[[forecast_var_name]], na.rm = TRUE),
-      ensemble_median = median(.data[[forecast_var_name]], na.rm = TRUE),
-      ensemble_q25 = quantile(.data[[forecast_var_name]], 0.25, na.rm = TRUE),
-      ensemble_q75 = quantile(.data[[forecast_var_name]], 0.75, na.rm = TRUE),
-      ensemble_q10 = quantile(.data[[forecast_var_name]], 0.1, na.rm = TRUE),
-      ensemble_q90 = quantile(.data[[forecast_var_name]], 0.9, na.rm = TRUE),
-      # Official observation
       obs_value = first(.data[[obs_var_name]]),
-      # WOW crowd-sourced data
       wow_value = first(.data[[wow_var_name]]),
       wow_n_stations = first(wow_n_stations),
       .groups = "drop"
     )
   
-  # Add WOW SD if available for temperature
-  if (!is.null(wow_sd_name) && wow_sd_name %in% names(plot_data)) {
-    ensemble_stats <- ensemble_stats %>%
-      left_join(
-        plot_data %>%
-          group_by(lead_time_hrs) %>%
-          summarise(wow_sd = first(.data[[wow_sd_name]]), .groups = "drop"),
-        by = "lead_time_hrs"
-      )
-  }
+  # Create spaghetti plot
+  p <- ggplot() +
+    # Spaghetti lines for all ensemble members
+    geom_line(data = plot_data,
+              aes(x = lead_time_hrs, y = .data[[forecast_var_name]], group = Member),
+              alpha = 0.3, 
+              color = "gray50", 
+              size = 0.4)
   
-  # Create base plot
-  p <- ggplot()
-  
-  # Add error bands if requested
-  if (show_error_band) {
-    # Forecast uncertainty bands
+  # Add ensemble mean if requested
+  if (show_mean) {
     p <- p +
-      geom_ribbon(data = ensemble_stats,
-                  aes(x = lead_time_hrs, ymin = ensemble_q10, ymax = ensemble_q90),
-                  fill = "lightblue", alpha = 0.2) +
-      geom_ribbon(data = ensemble_stats,
-                  aes(x = lead_time_hrs, ymin = ensemble_q25, ymax = ensemble_q75),
-                  fill = "blue", alpha = 0.3)
-    
-    # WOW uncertainty band for temperature only
-    if (variable == "Temperature_C" && "wow_sd" %in% names(ensemble_stats)) {
-      p <- p +
-        geom_ribbon(data = ensemble_stats %>% 
-                      filter(!is.na(wow_value) & !is.na(wow_sd)),
-                    aes(x = lead_time_hrs, 
-                        ymin = wow_value - wow_sd, 
-                        ymax = wow_value + wow_sd),
-                    fill = "darkgreen", alpha = 0.2)
-    }
+      stat_summary(data = plot_data,
+                   aes(x = lead_time_hrs, y = .data[[forecast_var_name]]),
+                   fun = mean, 
+                   geom = "line", 
+                   color = "black", 
+                   size = 1, 
+                   alpha = 0.9)
   }
   
-  # Add individual ensemble members if requested and not too many
-  if (show_individual_members && length(members) <= 20) {
-    p <- p +
-      geom_line(data = plot_data,
-                aes(x = lead_time_hrs, y = .data[[forecast_var_name]], group = Member),
-                alpha = 0.2, color = "gray50", size = 0.3)
-  }
-  
-  # Add main lines
+  # Add official observations (red)
   p <- p +
-    # Ensemble mean (blue)
-    geom_line(data = ensemble_stats,
-              aes(x = lead_time_hrs, y = ensemble_mean),
-              color = "blue", size = 1.2) +
-    # Official observations (red)
-    geom_line(data = ensemble_stats %>% filter(!is.na(obs_value)),
+    geom_line(data = obs_data %>% filter(!is.na(obs_value)),
               aes(x = lead_time_hrs, y = obs_value),
-              color = "red", size = 1.5) +
-    geom_point(data = ensemble_stats %>% filter(!is.na(obs_value)),
+              color = "blue", 
+              size = 1.2) +
+    geom_point(data = obs_data %>% filter(!is.na(obs_value)),
                aes(x = lead_time_hrs, y = obs_value),
-               color = "darkred", size = 2, alpha = 0.8) +
-    # WOW crowd-sourced mean (green)
-    geom_line(data = ensemble_stats %>% filter(!is.na(wow_value)),
+               color = "darkblue", 
+               size = 2, 
+               alpha = 0.8)
+  
+  # Add WOW crowd-sourced observations (green)
+  p <- p +
+    geom_line(data = obs_data %>% filter(!is.na(wow_value)),
               aes(x = lead_time_hrs, y = wow_value),
-              color = "darkgreen", size = 1.5, linetype = "solid") +
-    geom_point(data = ensemble_stats %>% filter(!is.na(wow_value)),
-               aes(x = lead_time_hrs, y = wow_value, size = wow_n_stations),
-               color = "darkgreen", alpha = 0.8) +
-    scale_size_continuous(range = c(1, 4), name = "WOW Stations", guide = "none")
+              color = "red", 
+              size = 1.2) +
+    geom_point(data = obs_data %>% filter(!is.na(wow_value)),
+               aes(x = lead_time_hrs, y = wow_value),
+               color = "darkred", 
+               size = 2, 
+               alpha = 0.8)
   
   # Get station info
   station_info <- unique(plot_data$station_id)[1]
@@ -982,15 +690,16 @@ plot_forecast_obs_wow_comparison <- function(forecast_datetime,
   # Labels and theme
   p <- p +
     labs(
-      title = paste("Forecast vs Observations: Official & Crowd-sourced -", 
+      title = paste("Forecast Spaghetti Plot -", 
                     format(as.POSIXct(forecast_datetime), "%Y-%m-%d %H:%M UTC")),
       subtitle = paste("Gridpoint", gridpoint_id, "(", gridpoint_lat, "°N,", gridpoint_lon, "°E) |",
                       "Station:", station_info, "|",
                       length(members), "ensemble members"),
       x = "Lead Time (hours)",
       y = y_label,
-      caption = paste("Blue: Ensemble mean | Red: Official obs | Green: WOW mean (", 
-                     n_wow_stations, "nearest stations)")
+      caption = paste("Gray: Ensemble members | Blue: Official obs | Red: WOW mean (", 
+                     n_wow_stations, "nearest stations)",
+                     if(show_mean) "| Black: Ensemble mean" else "")
     ) +
     theme_minimal() +
     theme(
@@ -1009,32 +718,31 @@ plot_forecast_obs_wow_comparison <- function(forecast_datetime,
   return(p)
 }
 
-# Simplified multi-panel function for temperature and humidity only
-plot_temp_humidity_comparison <- function(forecast_datetime, 
+# Simplified multi-panel spaghetti plot function
+plot_temp_humidity_spaghetti <- function(forecast_datetime, 
                                         gridpoint_id,
                                         members = 1:51,
-                                        n_wow_stations = 5) {
+                                        n_wow_stations = 5,
+                                        show_mean = FALSE) {
   
-  # Create temperature plot
-  p_temp <- plot_forecast_obs_wow_comparison(
+  # Create temperature spaghetti plot
+  p_temp <- plot_forecast_obs_wow_spaghetti(
     forecast_datetime = forecast_datetime,
     gridpoint_id = gridpoint_id,
     variable = "Temperature_C",
     members = members,
     n_wow_stations = n_wow_stations,
-    show_error_band = TRUE,
-    show_individual_members = FALSE
+    show_mean = show_mean
   )
   
-  # Create humidity plot
-  p_humidity <- plot_forecast_obs_wow_comparison(
+  # Create humidity spaghetti plot  
+  p_humidity <- plot_forecast_obs_wow_spaghetti(
     forecast_datetime = forecast_datetime,
     gridpoint_id = gridpoint_id,
     variable = "Humidity_pct",
     members = members,
     n_wow_stations = n_wow_stations,
-    show_error_band = TRUE,
-    show_individual_members = FALSE
+    show_mean = show_mean
   )
   
   # Combine plots
@@ -1049,36 +757,219 @@ plot_temp_humidity_comparison <- function(forecast_datetime,
 
 # Usage examples:
 
-# Temperature comparison
-p_temp <- plot_forecast_obs_wow_comparison(
+# Basic spaghetti plot for temperature
+p_temp <- plot_forecast_obs_wow_spaghetti(
+  forecast_datetime = "2021-01-28 12:00:00",
+  gridpoint_id = 605,
+  variable = "Temperature_C",
+  members = 1:51,
+  n_wow_stations = 5
+)
+print(p_temp)
+
+# Spaghetti plot with ensemble mean
+p_temp_mean <- plot_forecast_obs_wow_spaghetti(
+  forecast_datetime = "2021-01-29 12:00:00",
+  gridpoint_id = 605,
+  variable = "Temperature_C",
+  members = 1:51,
+  n_wow_stations = 5,
+  show_mean = TRUE
+)
+print(p_temp_mean)
+
+# Humidity spaghetti plot
+p_humidity <- plot_forecast_obs_wow_spaghetti(
+  forecast_datetime = "2022-01-28 12:00:00",
+  gridpoint_id = 605,
+  variable = "Humidity_pct",
+  members = 1:51,
+  n_wow_stations = 5
+)
+print(p_humidity)
+
+# Combined temperature and humidity spaghetti plots
+p_combined <- plot_temp_humidity_spaghetti(
+  forecast_datetime = "2023-09-28 12:00:00",
+  gridpoint_id = 605,
+  members = 1:51,
+  n_wow_stations = 5,
+  show_mean = TRUE
+)
+print(p_combined)
+```
+
+```{r}
+plot_forecast_obs_wow_comparison <- function(forecast_datetime, 
+                                              gridpoint_id, 
+                                              variable = "Temperature_C", 
+                                              members = 1:51,
+                                              n_wow_stations = 5,
+                                              show_error_band = TRUE,
+                                              show_individual_members = FALSE,
+                                              max_lead_time = 240) {
+  
+  var_mapping <- list(
+    "Temperature_C" = list(
+      forecast = "Temperature_C",
+      obs = "T_DRYB_10",
+      wow = "wow_temp_mean",
+      wow_sd = "wow_temp_sd",
+      label = "Temperature (°C)"
+    ),
+    "Humidity_pct" = list(
+      forecast = "Relative_humidity_pct",  
+      obs = "RH_10",
+      wow = "wow_humidity_mean",
+      wow_sd = NULL,
+      label = "Relative Humidity (%)"
+    )
+  )
+  
+  if (!variable %in% names(var_mapping)) {
+    stop(paste("Invalid variable:", variable, 
+               ". Valid options are:", paste(names(var_mapping), collapse = ", ")))
+  }
+  
+  var_info <- var_mapping[[variable]]
+  forecast_var_name <- var_info$forecast
+  obs_var_name <- var_info$obs
+  wow_var_name <- var_info$wow
+  wow_sd_name <- var_info$wow_sd
+  y_label <- var_info$label
+  
+  cat("Fetching combined data...\n")
+  combined <- combine_forecast_obs_wow(
+    date_str = forecast_datetime, 
+    gridpoint_id = gridpoint_id,
+    n_wow_stations = n_wow_stations
+  )
+  
+  if (is.null(combined) || nrow(combined) == 0) {
+    warning(paste("No combined data found for", forecast_datetime, "at gridpoint", gridpoint_id))
+    return(NULL)
+  }
+  
+  if (!forecast_var_name %in% names(combined)) {
+    cat("Available forecast columns:", paste(names(combined), collapse = ", "), "\n")
+    stop(paste("Forecast variable", forecast_var_name, "not found in data"))
+  }
+  
+  member_names <- paste0("M", members)
+  plot_data <- combined %>% filter(Member %in% member_names)
+  
+  ensemble_stats <- plot_data %>%
+    group_by(lead_time_hrs) %>%
+    summarise(
+      ensemble_mean = mean(.data[[forecast_var_name]], na.rm = TRUE),
+      ensemble_median = median(.data[[forecast_var_name]], na.rm = TRUE),
+      ensemble_q25 = quantile(.data[[forecast_var_name]], 0.25, na.rm = TRUE),
+      ensemble_q75 = quantile(.data[[forecast_var_name]], 0.75, na.rm = TRUE),
+      ensemble_q10 = quantile(.data[[forecast_var_name]], 0.1, na.rm = TRUE),
+      ensemble_q90 = quantile(.data[[forecast_var_name]], 0.9, na.rm = TRUE),
+      obs_value = first(.data[[obs_var_name]]),
+      wow_value = first(.data[[wow_var_name]]),
+      wow_n_stations = first(wow_n_stations),
+      .groups = "drop"
+    )
+  
+  if (!is.null(wow_sd_name) && wow_sd_name %in% names(plot_data)) {
+    ensemble_stats <- ensemble_stats %>%
+      left_join(
+        plot_data %>%
+          group_by(lead_time_hrs) %>%
+          summarise(wow_sd = first(.data[[wow_sd_name]]), .groups = "drop"),
+        by = "lead_time_hrs"
+      )
+  }
+  
+  p <- ggplot()
+  
+  if (show_error_band) {
+    p <- p +
+      geom_ribbon(data = ensemble_stats,
+                  aes(x = lead_time_hrs, ymin = ensemble_q10, ymax = ensemble_q90),
+                  fill = "lightblue", alpha = 0.2) +
+      geom_ribbon(data = ensemble_stats,
+                  aes(x = lead_time_hrs, ymin = ensemble_q25, ymax = ensemble_q75),
+                  fill = "blue", alpha = 0.3)
+    
+    if (variable == "Temperature_C" && "wow_sd" %in% names(ensemble_stats)) {
+      p <- p +
+        geom_ribbon(data = ensemble_stats %>% 
+                      filter(!is.na(wow_value) & !is.na(wow_sd)),
+                    aes(x = lead_time_hrs, 
+                        ymin = wow_value - wow_sd, 
+                        ymax = wow_value + wow_sd),
+                    fill = "darkgreen", alpha = 0.2)
+    }
+  }
+  
+  if (show_individual_members && length(members) <= 20) {
+    p <- p +
+      geom_line(data = plot_data,
+                aes(x = lead_time_hrs, y = .data[[forecast_var_name]], group = Member),
+                alpha = 0.2, color = "gray50", size = 0.3)
+  }
+  
+  p <- p +
+    geom_line(data = ensemble_stats,
+              aes(x = lead_time_hrs, y = ensemble_mean),
+              color = "blue", size = 0.8) +
+    geom_line(data = ensemble_stats %>% filter(!is.na(obs_value)),
+              aes(x = lead_time_hrs, y = obs_value),
+              color = "red", size = 0.8) +
+    geom_point(data = ensemble_stats %>% filter(!is.na(obs_value)),
+               aes(x = lead_time_hrs, y = obs_value),
+               color = "darkred", size = 1.5, alpha = 0.8) +
+    geom_line(data = ensemble_stats %>% filter(!is.na(wow_value)),
+              aes(x = lead_time_hrs, y = wow_value),
+              color = "darkgreen", size = 0.8, linetype = "solid") +
+    geom_point(data = ensemble_stats %>% filter(!is.na(wow_value)),
+               aes(x = lead_time_hrs, y = wow_value, size = wow_n_stations),
+               color = "darkgreen", size = 1.5, alpha = 0.8) +
+    scale_size_continuous(range = c(1, 4), name = "WOW Stations", guide = "none")
+  
+  station_info <- unique(plot_data$station_id)[1]
+  gridpoint_lat <- round(unique(plot_data$gridpoint_lat)[1], 2)
+  gridpoint_lon <- round(unique(plot_data$gridpoint_lon)[1], 2)
+  
+  p <- p +
+    labs(
+      title = paste("Forecast vs Observations: Official & Crowd-sourced -", 
+                    format(as.POSIXct(forecast_datetime), "%Y-%m-%d %H:%M UTC")),
+      subtitle = paste("Gridpoint", gridpoint_id, "(", gridpoint_lat, "°N,", gridpoint_lon, "°E) |",
+                       "Station:", station_info, "|",
+                       length(members), "ensemble members"),
+      x = "Lead Time (hours)",
+      y = y_label,
+      caption = paste("Blue: Ensemble mean | Red: Official obs | Green: WOW mean (", 
+                      n_wow_stations, "nearest stations)")
+    ) +
+    theme_minimal() +
+    theme(
+      plot.title = element_text(size = 14, face = "bold"),
+      plot.subtitle = element_text(size = 11, color = "gray40"),
+      plot.caption = element_text(size = 9, color = "gray50", hjust = 0),
+      panel.grid.minor = element_blank()
+    ) +
+    scale_x_continuous(breaks = seq(0, max_lead_time, 24)) +
+    coord_cartesian(xlim = c(0, max_lead_time)) +
+    geom_vline(xintercept = seq(24, max_lead_time, 24), alpha = 0.2, linetype = "dashed")
+  
+  return(p)
+}
+
+p_temp_72 <- plot_forecast_obs_wow_comparison(
   forecast_datetime = "2021-01-28 12:00:00",
   gridpoint_id = 605,
   variable = "Temperature_C",
   members = 1:51,
   n_wow_stations = 5,
-  show_error_band = TRUE
+  show_error_band = TRUE,
+  max_lead_time = 72#only accept input from 0,6,12...72
 )
-print(p_temp)
-
-# Humidity comparison
-p_humidity <- plot_forecast_obs_wow_comparison(
-  forecast_datetime = "2022-07-28 12:00:00",
-  gridpoint_id = 605,
-  variable = "Humidity_pct",
-  members = 1:51,
-  n_wow_stations = 5,
-  show_error_band = TRUE
-)
-print(p_humidity)
-
-# Both variables in one panel
-p_combined <- plot_temp_humidity_comparison(
-  forecast_datetime = "2023-09-28 12:00:00",
-  gridpoint_id = 605,
-  members = 1:51,
-  n_wow_stations = 5
-)
-print(p_combined)
+print(p_temp_72)
 ```
 
 
