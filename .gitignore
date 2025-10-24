@@ -1,5 +1,9 @@
 # Ignore all data files
 data/
+data_clean/
+pev_results/
+results/
+wow_comparison_results/
 *.RData
 *.Rhistory
 .Rproj.user/

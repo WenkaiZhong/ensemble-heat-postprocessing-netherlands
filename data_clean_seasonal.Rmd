@@ -1,0 +1,756 @@
+---
+title: "data_clean_seasonal"
+author: "Wenkai_Zhong"
+date: "2025-08-25"
+output: html_document
+---
+```{r}
+library(here)
+```
+
+#make analysis table include forecast, official observation and WOW data
+#function
+```{r}
+# Custom progress display function
+show_progress <- function(current, total, start_time = NULL, message = "") {
+  # Calculate percentage
+  pct <- round(current / total * 100, 1)
+  
+  # Create progress bar
+  bar_width <- 40
+  filled <- round(bar_width * current / total)
+  bar <- paste0(
+    "|",
+    paste(rep("=", filled), collapse = ""),
+    paste(rep(" ", bar_width - filled), collapse = ""),
+    "|"
+  )
+  
+  # Calculate ETA if start_time provided
+  eta_msg <- ""
+  if (!is.null(start_time)) {
+    elapsed <- as.numeric(difftime(Sys.time(), start_time, units = "secs"))
+    if (current > 0) {
+      eta_secs <- (elapsed / current) * (total - current)
+      if (eta_secs < 60) {
+        eta_msg <- sprintf(" ETA: %ds", round(eta_secs))
+      } else {
+        eta_msg <- sprintf(" ETA: %.1fm", eta_secs / 60)
+      }
+    }
+  }
+  
+  # Display
+  cat(sprintf("\r%s [%d/%d] %.1f%%%s %s          ", 
+            bar, current, total, pct, eta_msg, message))
+  
+  if (current == total) cat("\n")
+}
+
+# Modified collection function with multiple leadtime support
+collect_data_range_optimized <- function(start_date, end_date, gridpoint_id, 
+                                         leadtime = NULL,  # Can be NULL, single value, or vector
+                                         n_wow_stations = 5,
+                                         parallel = FALSE,
+                                         n_cores = NULL) {
+  
+  # Setup
+  start_date_obj <- as.Date(start_date)
+  end_date_obj <- as.Date(end_date)
+  init_start_date <- start_date_obj - 10
+  init_end_date <- end_date_obj
+  
+  # Handle leadtime parameter
+  if (is.null(leadtime)) {
+    leadtime <- seq(0, 240, by = 6)  # Default: all standard lead times
+    cat("Using all standard lead times (0-240 hours, every 6 hours)\n")
+  } else if (length(leadtime) == 1) {
+    cat(sprintf("Using single lead time: %d hours\n", leadtime))
+  } else {
+    cat(sprintf("Using %d lead times: %s hours\n", 
+                length(leadtime), paste(sort(leadtime), collapse = ", ")))
+  }
+  
+  unique_init_dates <- seq(init_start_date, init_end_date, by = "day")
+  total_inits <- length(unique_init_dates) * 2
+  
+  cat(sprintf("\nCollecting data from %s to %s\n", start_date, end_date))
+  cat(sprintf("Initialization period: %s to %s\n", init_start_date, init_end_date))
+  cat(sprintf("Total initialization times: %d (00:00 and 12:00 UTC)\n", total_inits))
+  cat(sprintf("Grid point ID: %d\n", gridpoint_id))
+  cat(sprintf("WOW stations: %d\n\n", n_wow_stations))
+  
+  # Initialize
+  data_list <- vector("list", total_inits)
+  list_index <- 1
+  progress <- 0
+  failed_count <- 0
+  start_time <- Sys.time()
+  
+  # Optional parallel processing setup
+  if (parallel) {
+    if (!requireNamespace("parallel", quietly = TRUE)) {
+      cat("Warning: 'parallel' package not available. Using sequential processing.\n")
+      parallel <- FALSE
+    } else {
+      if (is.null(n_cores)) {
+        n_cores <- parallel::detectCores() - 1
+      }
+      cat(sprintf("Using parallel processing with %d cores\n\n", n_cores))
+    }
+  }
+  
+  if (parallel) {
+    # Parallel processing
+    cl <- parallel::makeCluster(n_cores)
+    on.exit(parallel::stopCluster(cl))
+    
+    # Export necessary functions and libraries to workers
+    parallel::clusterExport(cl, c("combine_forecast_obs_wow", 
+                                   "combine_forecast_obs",
+                                   "import_WOW_nearest_stations",
+                                   "get_wbgt"), 
+                            envir = .GlobalEnv)
+    
+    parallel::clusterEvalQ(cl, {
+      library(dplyr)
+      library(tidyr)
+      library(lubridate)
+    })
+    
+    # Create parameter combinations
+    params <- expand.grid(
+      init_date = as.character(unique_init_dates),
+      hour = c("00:00:00", "12:00:00"),
+      stringsAsFactors = FALSE
+    )
+    
+    # Process in parallel
+    cat("Processing forecasts in parallel...\n")
+    
+    results <- parallel::parLapply(cl, 1:nrow(params), function(i) {
+      init_time <- paste(params$init_date[i], params$hour[i])
+      
+      tryCatch({
+        suppressWarnings(suppressMessages({
+          temp_data <- combine_forecast_obs_wow(
+            init_time, 
+            gridpoint_id,
+            leadtime,
+            n_wow_stations = n_wow_stations,
+            include_metadata = FALSE
+          )
+        }))
+        
+        return(temp_data)
+        
+      }, error = function(e) {
+        return(NULL)
+      })
+    })
+    
+    # Filter out NULL results and count failures
+    data_list <- results[!sapply(results, is.null)]
+    failed_count <- sum(sapply(results, is.null))
+    
+  } else {
+    # Sequential processing with progress bar
+    for (init_date in as.character(unique_init_dates)) {
+      for (hour in c("00:00:00", "12:00:00")) {
+        init_time <- paste(init_date, hour)
+        progress <- progress + 1
+        
+        # Show detailed progress
+        show_progress(progress, total_inits, start_time, 
+                     message = sprintf("Init: %s", init_time))
+        
+        # Collect data with leadtime parameter
+        tryCatch({
+          suppressWarnings(suppressMessages({
+            temp_data <- combine_forecast_obs_wow(
+              init_time, 
+              gridpoint_id,
+              leadtime,  # Can be single value, vector, or NULL
+              n_wow_stations = n_wow_stations,
+              include_metadata = FALSE
+            )
+          }))
+          
+          if (!is.null(temp_data) && nrow(temp_data) > 0) {
+            data_list[[list_index]] <- temp_data
+            list_index <- list_index + 1
+          } else {
+            failed_count <- failed_count + 1
+          }
+          
+          # Clean up
+          rm(temp_data)
+          
+        }, error = function(e) {
+          failed_count <- failed_count + 1
+        })
+        
+        # Aggressive temp file cleanup - clean after EVERY iteration
+        if (progress %% 10 == 0) {  # Clean every 10 iterations
+          suppressWarnings({
+            files <- list.files(tempdir(), full.names = TRUE)
+            if (length(files) > 0) {
+              file.remove(files[!file.info(files)$isdir])
+            }
+            gc(verbose = FALSE, full = TRUE)
+          })
+        }
+      }
+    }
+    
+    # Remove NULL entries for sequential processing
+    data_list <- data_list[1:(list_index-1)]
+  }
+  
+  # Summary
+  total_time <- difftime(Sys.time(), start_time, units = "mins")
+  cat(sprintf("\n\nCollection complete in %.1f minutes\n", total_time))
+  cat(sprintf("Success: %d | Failed: %d\n", 
+              length(data_list), failed_count))
+  
+  if (length(data_list) == 0) {
+    cat("No data collected\n")
+    return(data.frame())
+  }
+  
+  # Combine data
+  cat("\nCombining data...")
+  
+  # Get all unique columns across all data frames
+  all_cols <- unique(unlist(lapply(data_list, names)))
+  
+  # Process in chunks to avoid memory issues
+  chunk_size <- 50
+  n_chunks <- ceiling(length(data_list) / chunk_size)
+  
+  combined_chunks <- list()
+  
+  for (i in 1:n_chunks) {
+    start_idx <- (i - 1) * chunk_size + 1
+    end_idx <- min(i * chunk_size, length(data_list))
+    
+    # Standardize columns for this chunk
+    chunk_data <- lapply(data_list[start_idx:end_idx], function(df) {
+      if (is.null(df) || nrow(df) == 0) return(NULL)
+      missing_cols <- setdiff(all_cols, names(df))
+      if (length(missing_cols) > 0) {
+        for (col in missing_cols) df[[col]] <- NA
+      }
+      df[, all_cols]
+    })
+    
+    # Combine this chunk
+    chunk_combined <- do.call(rbind, chunk_data[!sapply(chunk_data, is.null)])
+    combined_chunks[[i]] <- chunk_combined
+    
+    # Show progress
+    cat(sprintf("\rCombining data... %d%%", round(i/n_chunks * 100)))
+  }
+  
+  # Final combination
+  all_data <- do.call(rbind, combined_chunks)
+  
+  # Clear memory
+  rm(data_list, combined_chunks)
+  gc(verbose = FALSE, full = TRUE)
+  
+  cat(" Done!\n")
+  
+  # Filter for valid period
+  start_datetime <- as.POSIXct(paste(start_date, "00:00:00"), tz = "UTC")
+  end_datetime <- as.POSIXct(paste(end_date, "23:59:59"), tz = "UTC")
+  
+  if ("Valid_datetime" %in% names(all_data)) {
+    cat("Filtering for valid period...")
+    filtered_data <- all_data[all_data$Valid_datetime >= start_datetime & 
+                              all_data$Valid_datetime <= end_datetime, ]
+    cat(" Done!\n")
+  } else {
+    filtered_data <- all_data
+  }
+  
+  # Remove duplicates if any (can happen with multiple lead times)
+  if ("Valid_datetime" %in% names(filtered_data) && "lead_time" %in% names(filtered_data)) {
+    cat("Removing duplicates...")
+    filtered_data <- filtered_data %>%
+      distinct()
+    cat(" Done!\n")
+  }
+  
+  # Summary statistics
+  cat("\n=== Final Dataset Summary ===\n")
+  cat(sprintf("Dimensions: %d rows × %d columns\n", nrow(filtered_data), ncol(filtered_data)))
+  
+  if ("lead_time" %in% names(filtered_data)) {
+    lead_times_found <- sort(unique(filtered_data$lead_time))
+    cat(sprintf("Lead times in data: %s\n", 
+                paste(head(lead_times_found, 10), collapse = ", ")))
+    if (length(lead_times_found) > 10) {
+      cat(sprintf("  ... and %d more\n", length(lead_times_found) - 10))
+    }
+  }
+  
+  if ("Valid_datetime" %in% names(filtered_data)) {
+    date_range <- range(filtered_data$Valid_datetime)
+    cat(sprintf("Date range: %s to %s\n", 
+                format(date_range[1], "%Y-%m-%d %H:%M"),
+                format(date_range[2], "%Y-%m-%d %H:%M")))
+  }
+  
+  if ("wow_data_available" %in% names(filtered_data)) {
+    wow_coverage <- mean(filtered_data$wow_data_available, na.rm = TRUE)
+    cat(sprintf("WOW data coverage: %.1f%%\n", wow_coverage * 100))
+  }
+  
+  # Final cleanup
+  suppressWarnings({
+    files <- list.files(tempdir(), full.names = TRUE)
+    if (length(files) > 0) {
+      file.remove(files[!file.info(files)$isdir])
+    }
+    gc(verbose = FALSE, full = TRUE)
+  })
+  
+  # Add metadata as attributes
+  attr(filtered_data, "leadtime") <- leadtime
+  attr(filtered_data, "collection_time") <- total_time
+  attr(filtered_data, "date_range") <- c(start_date, end_date)
+  
+  return(filtered_data)
+}
+
+# Example usage:
+
+# 1. Single lead time (original behavior)
+# data1 <- collect_data_range_optimized(
+#   start_date = "2021-07-01",
+#   end_date = "2021-07-07",
+#   gridpoint_id = 891,
+#   leadtime = 24,
+#   n_wow_stations = 5
+# )
+
+# 2. Multiple specific lead times
+# data2 <- collect_data_range_optimized(
+#   start_date = "2021-07-01",
+#   end_date = "2021-07-01",
+#   gridpoint_id = 891,
+#   leadtime = c(6, 12),
+#   n_wow_stations = 5
+# )
+
+
+# 3. All standard lead times (NULL)
+# data3 <- collect_data_range_optimized(
+#   start_date = "2021-07-01",
+#   end_date = "2021-07-07",
+#   gridpoint_id = 891,
+#   leadtime = NULL,  # Will use 0, 6, 12, ..., 240
+#   n_wow_stations = 5
+# )
+
+# 4. With parallel processing (for large datasets)
+# data4 <- collect_data_range_optimized(
+#   start_date = "2021-07-01",
+#   end_date = "2021-07-31",
+#   gridpoint_id = 891,
+#   leadtime = c(24, 48, 72),
+#   n_wow_stations = 5,
+#   parallel = TRUE,
+#   n_cores = 4
+# )
+
+
+```
+
+#clean data create and save those to RDS
+```{r}
+# # Set parameters for 12-hour and 24 h forecast
+# gridpoint_id <- 891
+# n_wow_stations <- 5
+# leadtime_hours <- c(6, 24, 48)
+# 
+# get_filename <- function(season, year, gridpoint, leadtimes) {
+#   # Create leadtime string: "L6_24_48" for multiple or "L6" for single
+#   lt_str <- paste0("L", paste(leadtimes, collapse = "_"))
+#   
+#   # Format: season_year_Gxxxx_Lxx.rds
+#   filename <- sprintf("%s_%d_G%d_%s.rds", 
+#                      tolower(season), year, gridpoint, lt_str)
+#   return(filename)
+# }
+# 
+# # ============================================
+# #              2021 DATA COLLECTION
+# # ============================================
+# 
+# cat("=====================================\n")
+# cat("Starting 2021 Data Collection\n")
+# cat("Lead times:", paste(leadtime_hours, "hours\n"))
+# cat("=====================================\n\n")
+# 
+# # Spring 2021 (March 1 - May 31) ✓ COMPLETED
+# spring_2021_data <- collect_data_range_optimized(
+#   start_date = "2021-03-01",
+#   end_date = "2021-05-31",
+#   gridpoint_id = gridpoint_id,
+#   leadtime = leadtime_hours,
+#   n_wow_stations = n_wow_stations
+# )
+# filename <- get_filename("spring", 2021, gridpoint_id, leadtime_hours)
+# saveRDS(spring_2021_data, here("data_clean", filename))
+# cat("✓ Spring 2021 saved:", filename, "| Rows:", nrow(spring_2021_data), "\n\n")
+# 
+# # Summer 2021 (June 1 - August 31) 
+# # ⚠️ WARNING: Missing data from 2021-07-29 04:00 to 2021-08-26 10:00
+# summer_2021_data <- collect_data_range_optimized(
+#   start_date = "2021-06-01",
+#   end_date = "2021-08-31",
+#   gridpoint_id = gridpoint_id,
+#   leadtime = leadtime_hours,
+#   n_wow_stations = n_wow_stations
+# )
+# filename <- get_filename("summer", 2021, gridpoint_id, leadtime_hours)
+# saveRDS(summer_2021_data, here("data_clean", filename))
+# cat("✓ Summer 2021 saved:", filename, "| Rows:", nrow(summer_2021_data), "\n")
+# cat("  ⚠️ Note: Missing data period 07-29 to 08-26\n\n")
+# 
+# # Autumn 2021 (September 1 - November 30)
+# # ⚠️ WARNING: Missing data from 2021-10-18 11:00 to 2021-10-20 20:00
+# autumn_2021_data <- collect_data_range_optimized(
+#   start_date = "2021-09-01",
+#   end_date = "2021-11-30",
+#   gridpoint_id = gridpoint_id,
+#   leadtime = leadtime_hours,
+#   n_wow_stations = n_wow_stations
+# )
+# filename <- get_filename("autumn", 2021, gridpoint_id, leadtime_hours)
+# saveRDS(autumn_2021_data, here("data_clean", filename))
+# cat("✓ Autumn 2021 saved:", filename, "| Rows:", nrow(autumn_2021_data), "\n")
+# cat("  ⚠️ Note: Missing data period 10-18 to 10-20\n\n")
+# 
+# # Winter 2021-2022 (December 1, 2021 - February 28, 2022) ✓ COMPLETED
+# winter_2021_data <- collect_data_range_optimized(
+#   start_date = "2021-12-01",
+#   end_date = "2022-02-28",
+#   gridpoint_id = gridpoint_id,
+#   leadtime = leadtime_hours,
+#   n_wow_stations = n_wow_stations
+# )
+# filename <- get_filename("winter", 2021, gridpoint_id, leadtime_hours)
+# saveRDS(winter_2021_data, here("data_clean", filename))
+# cat("✓ Winter 2021-22 saved:", filename, "| Rows:", nrow(winter_2021_data), "\n\n")
+# 
+# # ============================================
+# #              2022 DATA COLLECTION
+# # ============================================
+# 
+# cat("=====================================\n")
+# cat("Starting 2022 Data Collection\n")
+# cat("=====================================\n\n")
+# 
+# # Spring 2022 (March 1 - May 31)
+# # spring_2022_data <- collect_data_range_optimized(
+# #   start_date = "2022-03-01",
+# #   end_date = "2022-05-31",
+# #   gridpoint_id = gridpoint_id,
+# #   leadtime = leadtime_hours,
+# #   n_wow_stations = n_wow_stations
+# # )
+# # filename <- get_filename("spring", 2022, gridpoint_id, leadtime_hours)
+# # saveRDS(spring_2022_data, here("data_clean", filename))
+# # cat("✓ Spring 2022 saved:", filename, "| Rows:", nrow(spring_2022_data), "\n\n")
+# 
+# # Summer 2022 (June 1 - August 31)
+# # summer_2022_data <- collect_data_range_optimized(
+# #   start_date = "2022-06-01",
+# #   end_date = "2022-08-31",
+# #   gridpoint_id = gridpoint_id,
+# #   leadtime = leadtime_hours,
+# #   n_wow_stations = n_wow_stations
+# # )
+# # filename <- get_filename("summer", 2022, gridpoint_id, leadtime_hours)
+# # saveRDS(summer_2022_data, here("data_clean", filename))
+# # cat("✓ Summer 2022 saved:", filename, "| Rows:", nrow(summer_2022_data), "\n\n")
+# 
+# # Autumn 2022 (September 1 - November 30)
+# # autumn_2022_data <- collect_data_range_optimized(
+# #   start_date = "2022-09-01",
+# #   end_date = "2022-11-30",
+# #   gridpoint_id = gridpoint_id,
+# #   leadtime = leadtime_hours,
+# #   n_wow_stations = n_wow_stations
+# # )
+# # filename <- get_filename("autumn", 2022, gridpoint_id, leadtime_hours)
+# # saveRDS(autumn_2022_data, here("data_clean", filename))
+# # cat("✓ Autumn 2022 saved:", filename, "| Rows:", nrow(autumn_2022_data), "\n\n")
+# 
+# # Winter 2022-2023 (December 1, 2022 - February 28, 2023)
+# # winter_2022_data <- collect_data_range_optimized(
+# #   start_date = "2022-12-01",
+# #   end_date = "2023-02-28",
+# #   gridpoint_id = gridpoint_id,
+# #   leadtime = leadtime_hours,
+# #   n_wow_stations = n_wow_stations
+# # )
+# # filename <- get_filename("winter", 2022, gridpoint_id, leadtime_hours)
+# # saveRDS(winter_2022_data, here("data_clean", filename))
+# # cat("✓ Winter 2022-23 saved:", filename, "| Rows:", nrow(winter_2022_data), "\n\n")
+# 
+# # ============================================
+# #              2023 DATA COLLECTION
+# # ============================================
+# 
+# cat("=====================================\n")
+# cat("Starting 2023 Data Collection\n")
+# cat("=====================================\n\n")
+# 
+# # Spring 2023 (March 1 - May 31)
+# # spring_2023_data <- collect_data_range_optimized(
+# #   start_date = "2023-03-01",
+# #   end_date = "2023-05-31",
+# #   gridpoint_id = gridpoint_id,
+# #   leadtime = leadtime_hours,
+# #   n_wow_stations = n_wow_stations
+# # )
+# # filename <- get_filename("spring", 2023, gridpoint_id, leadtime_hours)
+# # saveRDS(spring_2023_data, here("data_clean", filename))
+# # cat("✓ Spring 2023 saved:", filename, "| Rows:", nrow(spring_2023_data), "\n\n")
+# 
+# # Summer 2023 (June 1 - August 31)
+# # summer_2023_data <- collect_data_range_optimized(
+# #   start_date = "2023-06-01",
+# #   end_date = "2023-08-31",
+# #   gridpoint_id = gridpoint_id,
+# #   leadtime = leadtime_hours,
+# #   n_wow_stations = n_wow_stations
+# # )
+# # filename <- get_filename("summer", 2023, gridpoint_id, leadtime_hours)
+# # saveRDS(summer_2023_data, here("data_clean", filename))
+# # cat("✓ Summer 2023 saved:", filename, "| Rows:", nrow(summer_2023_data), "\n\n")
+# 
+# # Autumn 2023 (September 1 - November 30)
+# # autumn_2023_data <- collect_data_range_optimized(
+# #   start_date = "2023-09-01",
+# #   end_date = "2023-11-30",
+# #   gridpoint_id = gridpoint_id,
+# #   leadtime = leadtime_hours,
+# #   n_wow_stations = n_wow_stations
+# # )
+# # filename <- get_filename("autumn", 2023, gridpoint_id, leadtime_hours)
+# # saveRDS(autumn_2023_data, here("data_clean", filename))
+# # cat("✓ Autumn 2023 saved:", filename, "| Rows:", nrow(autumn_2023_data), "\n\n")
+# 
+# # Winter 2023-2024 (December 1, 2023 - February 29, 2024) 
+# # Note: 2024 is a leap year
+# winter_2023_data <- collect_data_range_optimized(
+#   start_date = "2023-12-01",
+#   end_date = "2023-12-31",
+#   gridpoint_id = gridpoint_id,
+#   leadtime = leadtime_hours,
+#   n_wow_stations = n_wow_stations
+# )
+# filename <- get_filename("winter", 2023, gridpoint_id, leadtime_hours)
+# saveRDS(winter_2023_data, here("data_clean", filename))
+# cat("✓ Winter 2023-24 saved:", filename, "| Rows:", nrow(winter_2023_data), "\n\n")
+
+```
+
+
+#Rotterdam
+```{r}
+# Set parameters for 12-hour and 24 h forecast
+gridpoint_id <- 1002
+n_wow_stations <- 5
+leadtime_hours <- c(6, 24, 48)
+
+get_filename <- function(season, year, gridpoint, leadtimes) {
+  # Create leadtime string: "L6_24_48" for multiple or "L6" for single
+  lt_str <- paste0("L", paste(leadtimes, collapse = "_"))
+  
+  # Format: season_year_Gxxxx_Lxx.rds
+  filename <- sprintf("%s_%d_G%d_%s.rds", 
+                     tolower(season), year, gridpoint, lt_str)
+  return(filename)
+}
+
+# ============================================
+#              2021 DATA COLLECTION
+# ============================================
+
+cat("=====================================\n")
+cat("Starting 2021 Data Collection\n")
+cat("Lead times:", paste(leadtime_hours, "hours\n"))
+cat("=====================================\n\n")
+
+# Spring 2021 (March 1 - May 31) 
+spring_2021_data <- collect_data_range_optimized(
+  start_date = "2021-03-01",
+  end_date = "2021-05-31",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("spring", 2021, gridpoint_id, leadtime_hours)
+saveRDS(spring_2021_data, here("data_clean", filename))
+cat("✓ Spring 2021 saved:", filename, "| Rows:", nrow(spring_2021_data), "\n\n")
+
+# Summer 2021 (June 1 - August 31) 
+# ⚠️ WARNING: Missing data from 2021-07-29 04:00 to 2021-08-26 10:00
+summer_2021_data <- collect_data_range_optimized(
+  start_date = "2021-06-01",
+  end_date = "2021-08-31",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("summer", 2021, gridpoint_id, leadtime_hours)
+saveRDS(summer_2021_data, here("data_clean", filename))
+cat("✓ Summer 2021 saved:", filename, "| Rows:", nrow(summer_2021_data), "\n")
+cat("  ⚠️ Note: Missing data period 07-29 to 08-26\n\n")
+
+# Autumn 2021 (September 1 - November 30)
+# ⚠️ WARNING: Missing data from 2021-10-18 11:00 to 2021-10-20 20:00
+autumn_2021_data <- collect_data_range_optimized(
+  start_date = "2021-09-01",
+  end_date = "2021-11-30",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("autumn", 2021, gridpoint_id, leadtime_hours)
+saveRDS(autumn_2021_data, here("data_clean", filename))
+cat("✓ Autumn 2021 saved:", filename, "| Rows:", nrow(autumn_2021_data), "\n")
+cat("  ⚠️ Note: Missing data period 10-18 to 10-20\n\n")
+
+# Winter 2021-2022 (December 1, 2021 - February 28, 2022) ✓ COMPLETED
+winter_2021_data <- collect_data_range_optimized(
+  start_date = "2021-12-01",
+  end_date = "2022-02-28",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("winter", 2021, gridpoint_id, leadtime_hours)
+saveRDS(winter_2021_data, here("data_clean", filename))
+cat("✓ Winter 2021-22 saved:", filename, "| Rows:", nrow(winter_2021_data), "\n\n")
+
+# ============================================
+#              2022 DATA COLLECTION
+# ============================================
+
+cat("=====================================\n")
+cat("Starting 2022 Data Collection\n")
+cat("=====================================\n\n")
+
+# Spring 2022 (March 1 - May 31)
+spring_2022_data <- collect_data_range_optimized(
+  start_date = "2022-03-01",
+  end_date = "2022-05-31",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("spring", 2022, gridpoint_id, leadtime_hours)
+saveRDS(spring_2022_data, here("data_clean", filename))
+cat("✓ Spring 2022 saved:", filename, "| Rows:", nrow(spring_2022_data), "\n\n")
+
+# Summer 2022 (June 1 - August 31)
+summer_2022_data <- collect_data_range_optimized(
+  start_date = "2022-06-01",
+  end_date = "2022-08-31",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("summer", 2022, gridpoint_id, leadtime_hours)
+saveRDS(summer_2022_data, here("data_clean", filename))
+cat("✓ Summer 2022 saved:", filename, "| Rows:", nrow(summer_2022_data), "\n\n")
+
+# Autumn 2022 (September 1 - November 30)
+autumn_2022_data <- collect_data_range_optimized(
+  start_date = "2022-09-01",
+  end_date = "2022-11-30",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("autumn", 2022, gridpoint_id, leadtime_hours)
+saveRDS(autumn_2022_data, here("data_clean", filename))
+cat("✓ Autumn 2022 saved:", filename, "| Rows:", nrow(autumn_2022_data), "\n\n")
+
+# Winter 2022-2023 (December 1, 2022 - February 28, 2023)
+winter_2022_data <- collect_data_range_optimized(
+  start_date = "2022-12-01",
+  end_date = "2023-02-28",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("winter", 2022, gridpoint_id, leadtime_hours)
+saveRDS(winter_2022_data, here("data_clean", filename))
+cat("✓ Winter 2022-23 saved:", filename, "| Rows:", nrow(winter_2022_data), "\n\n")
+
+# ============================================
+#              2023 DATA COLLECTION
+# ============================================
+
+cat("=====================================\n")
+cat("Starting 2023 Data Collection\n")
+cat("=====================================\n\n")
+
+# Spring 2023 (March 1 - May 31)
+spring_2023_data <- collect_data_range_optimized(
+  start_date = "2023-03-01",
+  end_date = "2023-05-31",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("spring", 2023, gridpoint_id, leadtime_hours)
+saveRDS(spring_2023_data, here("data_clean", filename))
+cat("✓ Spring 2023 saved:", filename, "| Rows:", nrow(spring_2023_data), "\n\n")
+
+# Summer 2023 (June 1 - August 31)
+summer_2023_data <- collect_data_range_optimized(
+  start_date = "2023-06-01",
+  end_date = "2023-08-31",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("summer", 2023, gridpoint_id, leadtime_hours)
+saveRDS(summer_2023_data, here("data_clean", filename))
+cat("✓ Summer 2023 saved:", filename, "| Rows:", nrow(summer_2023_data), "\n\n")
+
+# Autumn 2023 (September 1 - November 30)
+autumn_2023_data <- collect_data_range_optimized(
+  start_date = "2023-09-01",
+  end_date = "2023-11-30",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("autumn", 2023, gridpoint_id, leadtime_hours)
+saveRDS(autumn_2023_data, here("data_clean", filename))
+cat("✓ Autumn 2023 saved:", filename, "| Rows:", nrow(autumn_2023_data), "\n\n")
+
+# Winter 2023-2024 (December 1, 2023 - February 29, 2024) 
+# Note: 2024 is a leap year
+winter_2023_data <- collect_data_range_optimized(
+  start_date = "2023-12-01",
+  end_date = "2023-12-31",
+  gridpoint_id = gridpoint_id,
+  leadtime = leadtime_hours,
+  n_wow_stations = n_wow_stations
+)
+filename <- get_filename("winter", 2023, gridpoint_id, leadtime_hours)
+saveRDS(winter_2023_data, here("data_clean", filename))
+cat("✓ Winter 2023-24 saved:", filename, "| Rows:", nrow(winter_2023_data), "\n\n")
+
+```

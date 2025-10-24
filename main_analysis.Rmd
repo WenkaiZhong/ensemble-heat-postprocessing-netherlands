@@ -4,3 +4,2920 @@ author: "Wenkai_Zhong"
 date: "2025-08-06"
 output: html_document
 ---
+```{r}
+library(here)
+library(ggplot2)
+library(reshape2)
+library(viridis)
+library(dplyr)
+library(purrr)
+library(tidyr)
+library(compiler)
+library(quantreg)
+library(randomForest)
+library(lubridate) 
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(pROC)
+library(compiler)
+```
+
+#load_data for further research
+```{r}
+# Set file path
+data_path <- here("data_clean")
+
+# Get all RDS files in the directory
+# files <- list.files(data_path, pattern = "\\.rds$", full.names = TRUE)
+# print(paste("Found", length(files), "files"))
+# 
+# # Read files separately for each gridpoint
+# files_G891 <- files[grepl("G891", files)]
+# files_G1002 <- files[grepl("G1002", files)]
+# 
+# safe_read_combine <- function(file_list, grid_id, city_name) {
+#   data_list <- list()
+# 
+#   # Track which files have which columns
+#   file_column_summary <- list()
+# 
+#   # First pass: read all files and identify all unique columns
+#   all_columns <- c()
+# 
+#   for(i in seq_along(file_list)) {
+#     file <- file_list[i]
+#     filename <- tools::file_path_sans_ext(basename(file))
+# 
+#     tryCatch({
+#       data <- readRDS(file)
+#       all_columns <- unique(c(all_columns, names(data)))
+# 
+#       # Track which columns this file has
+#       file_column_summary[[filename]] <- names(data)
+# 
+#       print(paste("File", filename, "has", ncol(data), "columns"))
+#     }, error = function(e) {
+#       print(paste("Error reading", file, ":", e$message))
+#     })
+#   }
+# 
+#   print(paste("Total unique columns across all files:", length(all_columns)))
+# 
+#   # Check specifically for WOW columns across files
+#   wow_cols <- c("wow_temp_max", "wow_wbgt_max", "wow_temp_mean", "wow_wbgt_mean")
+#   print("\n=== WOW Column Availability by File ===")
+#   for(filename in names(file_column_summary)) {
+#     file_cols <- file_column_summary[[filename]]
+#     has_wow <- wow_cols[wow_cols %in% file_cols]
+#     missing_wow <- wow_cols[!wow_cols %in% file_cols]
+#     if(length(missing_wow) > 0) {
+#       print(sprintf("%s: MISSING %s", filename, paste(missing_wow, collapse=", ")))
+#     }
+#   }
+# 
+#   # Second pass: read and standardize all files
+#   for(i in seq_along(file_list)) {
+#     file <- file_list[i]
+#     filename <- tools::file_path_sans_ext(basename(file))
+#     parts <- strsplit(filename, "_")[[1]]
+# 
+#     tryCatch({
+#       data <- readRDS(file)
+# 
+#       # Before adding missing columns, check current state
+#       orig_ncol <- ncol(data)
+# 
+#       # Add missing columns with NA
+#       missing_cols <- setdiff(all_columns, names(data))
+#       if(length(missing_cols) > 0) {
+#         print(paste("Adding", length(missing_cols), "missing columns to", filename))
+#         for(col in missing_cols) {
+#           data[[col]] <- NA
+#         }
+#       }
+# 
+#       # Verify columns were added
+#       if(ncol(data) != length(all_columns)) {
+#         print(sprintf("WARNING: Column mismatch for %s. Expected %d, got %d",
+#                      filename, length(all_columns), ncol(data)))
+#       }
+# 
+#       # Convert station ID columns to character
+#       col_names <- names(data)
+#       station_id_cols <- col_names[grepl("station.*id|ExternalSiteId", col_names, ignore.case = TRUE)]
+#       for(col in station_id_cols) {
+#         if(col %in% names(data)) {
+#           data[[col]] <- as.character(data[[col]])
+#         }
+#       }
+# 
+#       # Add metadata
+#       data$season <- parts[1]
+#       data$year <- as.numeric(parts[2])
+#       data$gridpoint <- grid_id
+#       data$city <- city_name
+#       data$leadtime <- paste(parts[4:length(parts)], collapse = "_")
+# 
+#       # Store with all columns present
+#       data_list[[i]] <- data
+# 
+#       print(sprintf("Loaded %s: %d -> %d columns", filename, orig_ncol, ncol(data)))
+# 
+#     }, error = function(e) {
+#       print(paste("Error reading", file, ":", e$message))
+#     })
+#   }
+# 
+#   # Before combining, check what we have
+#   print("\n=== Pre-combination check ===")
+#   for(i in seq_along(data_list)) {
+#     if(!is.null(data_list[[i]])) {
+#       wow_present <- wow_cols[wow_cols %in% names(data_list[[i]])]
+#       print(sprintf("Data frame %d has %d columns, %d WOW columns",
+#                    i, ncol(data_list[[i]]), length(wow_present)))
+#     }
+#   }
+# 
+#   # Combine all data
+#   if(length(data_list) > 0) {
+#     # Remove NULL entries
+#     data_list <- data_list[!sapply(data_list, is.null)]
+# 
+#     combined <- bind_rows(data_list)
+# 
+#     print(sprintf("\n=== After combination: %d rows, %d columns ===",
+#                  nrow(combined), ncol(combined)))
+# 
+#     # Check WOW columns in combined data
+#     wow_in_combined <- wow_cols[wow_cols %in% names(combined)]
+#     print(sprintf("WOW columns in combined data: %s",
+#                  paste(wow_in_combined, collapse=", ")))
+# 
+#     # Summary of missing data
+#     for(col in wow_cols) {
+#       if(col %in% names(combined)) {
+#         na_count <- sum(is.na(combined[[col]]))
+#         total <- nrow(combined)
+#         non_na <- total - na_count
+#         print(sprintf("%s: %d non-NA values (%.1f%% missing)",
+#                      col, non_na, 100*na_count/total))
+#       } else {
+#         print(sprintf("%s: COLUMN NOT FOUND IN COMBINED DATA!", col))
+#       }
+#     }
+# 
+#     return(combined)
+#   } else {
+#     return(NULL)
+#   }
+# }
+# 
+# # Run with detailed diagnostics
+# data_amsterdam <- safe_read_combine(files_G891, "G891", "Amsterdam")
+# 
+# # Final check
+# print("\n=== FINAL CHECK ===")
+# print(sprintf("Amsterdam data: %d rows, %d columns",
+#              nrow(data_amsterdam), ncol(data_amsterdam)))
+# wow_cols_final <- names(data_amsterdam)[grepl("wow", names(data_amsterdam), ignore.case = TRUE)]
+# print(sprintf("WOW columns in final data: %s", paste(wow_cols_final, collapse=", ")))
+# 
+# # Apply the function
+# data_amsterdam <- safe_read_combine(files_G891, "G891", "Amsterdam")
+# data_rotterdam <- safe_read_combine(files_G1002, "G1002", "Rotterdam")
+# 
+# # Check what columns we have
+# print("Amsterdam columns with WOW:")
+# print(names(data_amsterdam)[grepl("wow", names(data_amsterdam), ignore.case = TRUE)])
+# 
+# print("Rotterdam columns with WOW:")
+# print(names(data_rotterdam)[grepl("wow", names(data_rotterdam), ignore.case = TRUE)])
+# 
+# 
+# # Fixed version that preserves all columns
+# process_knmi_observations <- function(data) {
+#   print(paste("Processing KNMI observations for", unique(data$city), "..."))
+#   print(paste("Original data rows:", nrow(data)))
+#   print(paste("Original columns:", ncol(data)))
+# 
+#   # Check unique LOCATION values
+#   unique_locations <- unique(data$LOCATION)
+#   print(paste("Found", length(unique_locations), "unique LOCATION values:",
+#               paste(unique_locations, collapse = ", ")))
+# 
+#   # Group by Member and lead_time_hrs, then take maximum of KNMI observations
+#   data_processed <- data %>%
+#     group_by(Member, lead_time_hrs, Valid_datetime, Forecast_init_datetime) %>%
+#     mutate(
+#       # Take maximum values for all KNMI observation columns
+#       T_DRYB_10 = mean(T_DRYB_10, na.rm = TRUE),
+#       T_DEWP_10 = mean(T_DEWP_10, na.rm = TRUE),
+#       T_WETB_10 = mean(T_WETB_10, na.rm = TRUE),
+#       TX_DRYB_10 = mean(TX_DRYB_10, na.rm = TRUE),
+#       RH_10 = mean(RH_10, na.rm = TRUE),
+#       WBGT_obs_10 = mean(WBGT_obs_10, na.rm = TRUE),
+#       U_10 = mean(U_10, na.rm = TRUE),
+# 
+#       # Count how many sensor locations contributed to this maximum
+#       n_locations = n_distinct(LOCATION, na.rm = TRUE),
+#       locations_included = paste(unique(LOCATION), collapse = "; ")
+#     ) %>%
+#     ungroup() %>%
+#     # Remove duplicate rows but KEEP ALL COLUMNS using .keep_all = TRUE
+#     distinct(Member, lead_time_hrs, Valid_datetime, .keep_all = TRUE)
+# 
+#   # Replace -Inf with NA (in case all values were NA for max())
+#   knmi_cols <- c("T_DRYB_10", "T_DEWP_10", "T_WETB_10", "TX_DRYB_10",
+#                  "RH_10", "WBGT_obs_10", "U_10")
+# 
+#   for(col in knmi_cols) {
+#     if(col %in% names(data_processed)) {
+#       inf_count <- sum(is.infinite(data_processed[[col]]), na.rm = TRUE)
+#       if(inf_count > 0) {
+#         print(paste("Warning:", inf_count, "infinite values found in", col))
+#         data_processed[[col]][is.infinite(data_processed[[col]])] <- NA
+#       }
+#     }
+#   }
+# 
+#   print(paste("Processed data rows:", nrow(data_processed)))
+#   print(paste("Processed data columns:", ncol(data_processed)))
+#   print(paste("Data reduction:",
+#               sprintf("%.1f%%", (1 - nrow(data_processed)/nrow(data)) * 100)))
+# 
+#   # Verify all WOW columns are preserved
+#   original_wow_cols <- names(data)[grepl("^wow_", names(data))]
+#   processed_wow_cols <- names(data_processed)[grepl("^wow_", names(data_processed))]
+# 
+#   if(length(original_wow_cols) != length(processed_wow_cols)) {
+#     print("\nWarning: Some WOW columns may have been lost!")
+#     print(paste("Original WOW columns:", length(original_wow_cols)))
+#     print(paste("Processed WOW columns:", length(processed_wow_cols)))
+#     lost_wow <- setdiff(original_wow_cols, processed_wow_cols)
+#     if(length(lost_wow) > 0) {
+#       print("Lost WOW columns:")
+#       print(lost_wow)
+#     }
+#   } else {
+#     print(paste("\nAll", length(original_wow_cols), "WOW columns preserved successfully!"))
+#   }
+# 
+#   # Summary statistics for verification
+#   print("\n=== KNMI Maximum Values Summary ===")
+#   print(paste("Temperature (T_DRYB_10) range:",
+#               sprintf("%.1f to %.1f°C",
+#                       min(data_processed$T_DRYB_10, na.rm = TRUE),
+#                       max(data_processed$T_DRYB_10, na.rm = TRUE))))
+#   print(paste("WBGT (WBGT_obs_10) range:",
+#               sprintf("%.1f to %.1f°C",
+#                       min(data_processed$WBGT_obs_10, na.rm = TRUE),
+#                       max(data_processed$WBGT_obs_10, na.rm = TRUE))))
+#   print(paste("Average locations per observation:",
+#               sprintf("%.1f", mean(data_processed$n_locations, na.rm = TRUE))))
+# 
+#   return(data_processed)
+# }
+# 
+# # Apply the corrected processing
+# data_amsterdam <- process_knmi_observations(data_amsterdam)
+# data_rotterdam <- process_knmi_observations(data_rotterdam)
+# #
+# # # === SAVE PROCESSED DATA ===
+# #
+# # Save Amsterdam data
+# amsterdam_file <- file.path(data_path, "data_amsterdam_processed.rds")
+# saveRDS(data_amsterdam, amsterdam_file)
+# print(paste("Saved Amsterdam data to:", amsterdam_file))
+# print(paste("File size:", round(file.size(amsterdam_file) / 1024^2, 1), "MB"))
+# 
+# # Save Rotterdam data
+# rotterdam_file <- file.path(data_path, "data_rotterdam_processed.rds")
+# saveRDS(data_rotterdam, rotterdam_file)
+# print(paste("Saved Rotterdam data to:", rotterdam_file))
+# print(paste("File size:", round(file.size(rotterdam_file) / 1024^2, 1), "MB"))
+
+# Load data
+data_amsterdam <- readRDS(here("data_clean", "data_amsterdam_processed.rds"))
+print(paste("Loaded Amsterdam data:", nrow(data_amsterdam), "rows,", ncol(data_amsterdam), "columns"))
+
+data_rotterdam <- readRDS(here("data_clean", "data_rotterdam_processed.rds"))
+print(paste("Loaded Rotterdam data:", nrow(data_rotterdam), "rows,", ncol(data_rotterdam), "columns"))
+
+```
+# Data Quality Distribution Analysis
+
+
+```{r}
+# Enhanced Data Quality Distribution Analysis with multiple variables
+analyze_wow_knmi_agreement_enhanced <- function(data_amsterdam, data_rotterdam) {
+  
+  # 1. Combine data and prepare for analysis
+  agreement_analysis <- bind_rows(
+    data_amsterdam %>% mutate(city = "Amsterdam"),
+    data_rotterdam %>% mutate(city = "Rotterdam")
+  ) %>%
+    filter(!is.na(wow_temp_mean) & !is.na(T_DRYB_10) & 
+           !is.na(wow_dewpoint_mean) & !is.na(T_DEWP_10) &
+           !is.na(wow_wbgt_mean) & !is.na(WBGT_obs_10)) %>%
+    mutate(
+      # Temperature bias
+      temp_bias = wow_temp_mean - T_DRYB_10,
+      temp_abs_dev = abs(temp_bias),
+      
+      # Dewpoint bias
+      dewpoint_bias = wow_dewpoint_mean - T_DEWP_10,
+      dewpoint_abs_dev = abs(dewpoint_bias),
+      
+      # WBGT bias
+      wbgt_bias = wow_wbgt_mean - WBGT_obs_10,
+      wbgt_abs_dev = abs(wbgt_bias),
+      
+      # Categorize deviations for temperature
+      temp_category = case_when(
+        temp_abs_dev < 1 ~ "Excellent (<1°C)",
+        temp_abs_dev < 2 ~ "Good (1-2°C)",
+        temp_abs_dev < 3 ~ "Acceptable (2-3°C)",
+        temp_abs_dev < 5 ~ "Poor (3-5°C)",
+        TRUE ~ "Very Poor (>5°C)"
+      )
+    )
+  
+  # 2. Summary statistics for all variables
+  summary_stats <- agreement_analysis %>%
+    group_by(city, season, leadtime) %>%
+    summarise(
+      n = n(),
+      # Temperature
+      temp_mean_bias = mean(temp_bias, na.rm = TRUE),
+      temp_sd_bias = sd(temp_bias, na.rm = TRUE),
+      temp_rmse = sqrt(mean(temp_bias^2, na.rm = TRUE)),
+      temp_mae = mean(temp_abs_dev, na.rm = TRUE),
+      temp_corr = cor(wow_temp_mean, T_DRYB_10, use = "complete.obs"),
+      
+      # Dewpoint
+      dewpoint_mean_bias = mean(dewpoint_bias, na.rm = TRUE),
+      dewpoint_rmse = sqrt(mean(dewpoint_bias^2, na.rm = TRUE)),
+      dewpoint_mae = mean(dewpoint_abs_dev, na.rm = TRUE),
+      dewpoint_corr = cor(wow_dewpoint_mean, T_DEWP_10, use = "complete.obs"),
+      
+      # WBGT
+      wbgt_mean_bias = mean(wbgt_bias, na.rm = TRUE),
+      wbgt_rmse = sqrt(mean(wbgt_bias^2, na.rm = TRUE)),
+      wbgt_mae = mean(wbgt_abs_dev, na.rm = TRUE),
+      wbgt_corr = cor(wow_wbgt_mean, WBGT_obs_10, use = "complete.obs"),
+      
+      .groups = 'drop'
+    )
+  
+  # 3. Multi-panel bias distribution plot
+  bias_long <- agreement_analysis %>%
+    select(city, season, temp_bias, dewpoint_bias, wbgt_bias) %>%
+    pivot_longer(cols = c(temp_bias, dewpoint_bias, wbgt_bias),
+                 names_to = "variable",
+                 values_to = "bias") %>%
+    mutate(variable = case_when(
+      variable == "temp_bias" ~ "Temperature",
+      variable == "dewpoint_bias" ~ "Dew Point",
+      variable == "wbgt_bias" ~ "WBGT"
+    ))
+  
+  p1 <- ggplot(bias_long, aes(x = bias, fill = season)) +
+    geom_histogram(bins = 50, alpha = 0.6, position = "identity") +
+    facet_grid(variable ~ city, scales = "free_y") +
+    geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+    xlim(-10, 5) +  # 设置x轴范围
+    labs(title = "WOW-KNMI Bias Distribution: Temperature, Dew Point, and WBGT",
+         x = "Bias (WOW - KNMI) [°C]",
+         y = "Count") +
+    theme_minimal() +
+    theme(strip.text = element_text(size = 10, face = "bold"))
+  
+  # 4. FIXED Correlation plot - removed coord_equal() due to free scales
+  p2 <- agreement_analysis %>%
+    ggplot(aes(x = T_DRYB_10, y = wow_temp_mean)) +
+    geom_hex(bins = 30) +
+    geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+    facet_grid(city ~ season) +
+    scale_fill_gradient(low = "lightblue", high = "darkblue", trans = "log10") +
+    labs(title = "WOW vs KNMI: Temperature Correlation",
+         x = "KNMI Temperature [°C]",
+         y = "WOW Temperature [°C]") +
+    theme_minimal()
+  
+  # Additional correlation plots for dewpoint and WBGT
+  p2_dewpoint <- agreement_analysis %>%
+    ggplot(aes(x = T_DEWP_10, y = wow_dewpoint_mean)) +
+    geom_hex(bins = 30) +
+    geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+    facet_grid(city ~ season) +
+    scale_fill_gradient(low = "lightgreen", high = "darkgreen", trans = "log10") +
+    labs(title = "WOW vs KNMI: Dew Point Correlation",
+         x = "KNMI Dew Point [°C]",
+         y = "WOW Dew Point [°C]") +
+    theme_minimal()
+  
+  p2_wbgt <- agreement_analysis %>%
+    ggplot(aes(x = WBGT_obs_10, y = wow_wbgt_mean)) +
+    geom_hex(bins = 30) +
+    geom_abline(intercept = 0, slope = 1, color = "red", linetype = "dashed") +
+    facet_grid(city ~ season) +
+    scale_fill_gradient(low = "lightyellow", high = "darkorange", trans = "log10") +
+    labs(title = "WOW vs KNMI: WBGT Correlation",
+         x = "KNMI WBGT [°C]",
+         y = "WOW WBGT [°C]") +
+    theme_minimal()
+  
+  # 5. Seasonal summary - fixed the names_sep issue
+  seasonal_summary <- summary_stats %>%
+    group_by(city, season) %>%
+    summarise(
+      temp_bias = mean(temp_mean_bias, na.rm = TRUE),
+      temp_mae = mean(temp_mae, na.rm = TRUE),
+      temp_corr = mean(temp_corr, na.rm = TRUE),
+      dewpoint_bias = mean(dewpoint_mean_bias, na.rm = TRUE),
+      dewpoint_mae = mean(dewpoint_mae, na.rm = TRUE),
+      dewpoint_corr = mean(dewpoint_corr, na.rm = TRUE),
+      wbgt_bias = mean(wbgt_mean_bias, na.rm = TRUE),
+      wbgt_mae = mean(wbgt_mae, na.rm = TRUE),
+      wbgt_corr = mean(wbgt_corr, na.rm = TRUE),
+      .groups = 'drop'
+    )
+  
+  # 6. Box plot comparison
+  p3 <- bias_long %>%
+    ggplot(aes(x = season, y = bias, fill = variable)) +
+    geom_boxplot(alpha = 0.7) +
+    facet_wrap(~city) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+    labs(title = "Seasonal Bias Comparison",
+         x = "Season",
+         y = "Bias [°C]",
+         fill = "Variable") +
+    theme_minimal() +
+    scale_fill_brewer(palette = "Set2")
+  
+  return(list(
+    summary = summary_stats,
+    seasonal = seasonal_summary,
+    plots = list(
+      bias_hist = p1, 
+      temp_corr = p2,
+      dewpoint_corr = p2_dewpoint,
+      wbgt_corr = p2_wbgt,
+      box_plot = p3
+    ),
+    detailed = agreement_analysis
+  ))
+}
+
+# Run enhanced analysis
+enhanced_analysis <- analyze_wow_knmi_agreement_enhanced(data_amsterdam, data_rotterdam)
+
+# Print comprehensive summary
+print("Overall Summary Statistics:")
+print(enhanced_analysis$summary)
+
+print("\nSeasonal Comparison:")
+print(enhanced_analysis$seasonal)
+
+# Display plots
+print(enhanced_analysis$plots$bias_hist)
+print(enhanced_analysis$plots$temp_corr)
+print(enhanced_analysis$plots$dewpoint_corr)
+print(enhanced_analysis$plots$wbgt_corr)
+print(enhanced_analysis$plots$box_plot)
+
+# Create a summary table for the paper
+summary_for_paper <- enhanced_analysis$seasonal %>%
+  mutate(
+    Temperature = sprintf("%.2f (%.3f)", temp_bias, temp_corr),
+    `Dew Point` = sprintf("%.2f (%.3f)", dewpoint_bias, dewpoint_corr),
+    WBGT = sprintf("%.2f (%.3f)", wbgt_bias, wbgt_corr)
+  ) %>%
+  select(city, season, Temperature, `Dew Point`, WBGT)
+
+print("\nFormatted for Paper (Bias in °C, Correlation in parentheses):")
+print(summary_for_paper)
+```
+
+########## test WOW and obs temp, humidity and wetbulb
+
+#CRPS score isodistrreg and Brier score
+
+```{r}
+# Function to compare CRPS between cities using different observation sources
+# Evaluates ensemble forecast performance for Temperature and WBGT
+compare_cities_crps <- function(data_list,      # List of dataframes for each city
+                                city_names,      # Vector of city names
+                                lead_time = 24,  # Forecast lead time in hours
+                                n_times = Inf,   # Maximum number of time points to process
+                                thresholds = c(27)) {  # WBGT thresholds for Brier Score
+  
+  # Load required libraries
+  library(isodistrreg)  # For CRPS and Brier Score calculations
+  library(dplyr)        # Data manipulation
+  library(ggplot2)      # Plotting
+  library(tidyr)        # Data reshaping
+  library(patchwork)    # Combining plots
+  library(knitr)        # Table formatting
+  library(kableExtra)   # Enhanced tables
+  
+  # Initialize storage lists for results
+  all_crps_results <- list()
+  all_brier_results <- list()
+  
+  # Process each city separately
+  for(city_idx in 1:length(data_list)) {
+    data <- data_list[[city_idx]]
+    city_name <- city_names[city_idx]
+    
+    # Filter data for specified lead time
+    data_lt <- data %>%
+      filter(lead_time_hrs == lead_time)
+    
+    # Get unique forecast valid times
+    unique_times <- unique(data_lt$Valid_datetime)
+    n_calc <- min(n_times, length(unique_times))
+    
+    cat(sprintf("\nProcessing %s: %d time points...\n", city_name, n_calc))
+    
+    # Initialize city-specific storage
+    crps_results_list <- list()
+    brier_results_list <- list()
+    valid_count <- 0
+    
+    # Loop through each time point
+    for(i in 1:n_calc) {
+      vtime <- unique_times[i]
+      
+      # Get ensemble data for this time
+      time_data <- data_lt %>%
+        filter(Valid_datetime == vtime)
+      
+      # Skip if insufficient ensemble members
+      if(nrow(time_data) < 10) next
+      
+      # Create ensemble matrices (members as columns)
+      ens_temp_df <- data.frame(t(time_data$Temperature_C))
+      colnames(ens_temp_df) <- paste0("M", 1:ncol(ens_temp_df))
+      
+      ens_wbgt_df <- data.frame(t(time_data$WBGT_C))
+      colnames(ens_wbgt_df) <- paste0("M", 1:ncol(ens_wbgt_df))
+      
+      # Extract observations - CORRECTED to use WOW max values
+      # KNMI: 10-minute averages from official stations
+      obs_temp_knmi <- time_data$T_DRYB_10[!is.na(time_data$T_DRYB_10)][1]
+      obs_wbgt_knmi <- time_data$WBGT_obs_10[!is.na(time_data$WBGT_obs_10)][1]
+      
+      # WOW: Hourly maximum values from crowd-sourced stations
+      obs_temp_wow_max <- time_data$wow_temp_max[!is.na(time_data$wow_temp_max)][1]
+      obs_wbgt_wow_max <- time_data$wow_wbgt_max[!is.na(time_data$wow_wbgt_max)][1]
+      
+      # Check if any observations are available
+      has_any_obs <- !is.na(obs_temp_knmi) || !is.na(obs_temp_wow_max) || 
+                     !is.na(obs_wbgt_knmi) || !is.na(obs_wbgt_wow_max)
+      
+      if(!has_any_obs) next
+      
+      valid_count <- valid_count + 1
+      
+      # Initialize CRPS results dataframe
+      crps_results <- data.frame(
+        city = city_name,
+        time = vtime,
+        season = time_data$season[1]
+      )
+      
+      # Calculate Temperature CRPS for KNMI observations
+      if(!is.na(obs_temp_knmi)) {
+        crps_results$crps_temp_knmi <- as.numeric(
+          isodistrreg::crps(predictions = ens_temp_df, y = obs_temp_knmi)
+        )
+      } else {
+        crps_results$crps_temp_knmi <- NA
+      }
+      
+      # Calculate Temperature CRPS for WOW max observations
+      if(!is.na(obs_temp_wow_max)) {
+        crps_results$crps_temp_wow_max <- as.numeric(
+          isodistrreg::crps(predictions = ens_temp_df, y = obs_temp_wow_max)
+        )
+      } else {
+        crps_results$crps_temp_wow_max <- NA
+      }
+      
+      # Calculate WBGT CRPS for KNMI observations
+      if(!is.na(obs_wbgt_knmi)) {
+        crps_results$crps_wbgt_knmi <- as.numeric(
+          isodistrreg::crps(predictions = ens_wbgt_df, y = obs_wbgt_knmi)
+        )
+      } else {
+        crps_results$crps_wbgt_knmi <- NA
+      }
+      
+      # Calculate WBGT CRPS for WOW max observations
+      if(!is.na(obs_wbgt_wow_max)) {
+        crps_results$crps_wbgt_wow_max <- as.numeric(
+          isodistrreg::crps(predictions = ens_wbgt_df, y = obs_wbgt_wow_max)
+        )
+      } else {
+        crps_results$crps_wbgt_wow_max <- NA
+      }
+      
+      # Store results
+      crps_results_list[[valid_count]] <- crps_results
+      
+      # Calculate Brier Scores for WBGT thresholds
+      for(thresh in thresholds) {
+        brier_result <- data.frame(
+          city = city_name,
+          time = vtime,
+          season = time_data$season[1],
+          threshold = thresh
+        )
+        
+        # Brier Score for KNMI WBGT observations
+        if(!is.na(obs_wbgt_knmi)) {
+          brier_result$bs_wbgt_knmi <- as.numeric(
+            isodistrreg::bscore(predictions = ens_wbgt_df, 
+                               thresholds = thresh, 
+                               y = obs_wbgt_knmi)
+          )
+        } else {
+          brier_result$bs_wbgt_knmi <- NA
+        }
+        
+        # Brier Score for WOW max WBGT observations
+        if(!is.na(obs_wbgt_wow_max)) {
+          brier_result$bs_wbgt_wow_max <- as.numeric(
+            isodistrreg::bscore(predictions = ens_wbgt_df, 
+                               thresholds = thresh, 
+                               y = obs_wbgt_wow_max)
+          )
+        } else {
+          brier_result$bs_wbgt_wow_max <- NA
+        }
+        
+        brier_results_list[[paste(valid_count, thresh, sep="_")]] <- brier_result
+      }
+    }
+    
+    # Combine city results if any valid data exists
+    if(length(crps_results_list) > 0) {
+      all_crps_results[[city_idx]] <- bind_rows(crps_results_list)
+      all_brier_results[[city_idx]] <- bind_rows(brier_results_list)
+    }
+  }
+  
+  # Combine results from all cities
+  combined_crps <- bind_rows(all_crps_results)
+  combined_brier <- bind_rows(all_brier_results)
+  
+  # Create seasonal comparison table
+  comparison_table <- combined_crps %>%
+    group_by(city, season) %>%
+    summarise(
+      n_obs = n(),
+      # Temperature CRPS statistics
+      temp_knmi_mean = mean(crps_temp_knmi, na.rm = TRUE),
+      temp_knmi_median = median(crps_temp_knmi, na.rm = TRUE),
+      temp_wow_max_mean = mean(crps_temp_wow_max, na.rm = TRUE),
+      temp_wow_max_median = median(crps_temp_wow_max, na.rm = TRUE),
+      # WBGT CRPS statistics
+      wbgt_knmi_mean = mean(crps_wbgt_knmi, na.rm = TRUE),
+      wbgt_knmi_median = median(crps_wbgt_knmi, na.rm = TRUE),
+      wbgt_wow_max_mean = mean(crps_wbgt_wow_max, na.rm = TRUE),
+      wbgt_wow_max_median = median(crps_wbgt_wow_max, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    mutate(across(where(is.numeric), ~round(., 3)))
+  
+  # Create overall statistics table
+  overall_table <- combined_crps %>%
+    group_by(city) %>%
+    summarise(
+      n_total = n(),
+      n_temp_knmi = sum(!is.na(crps_temp_knmi)),
+      n_temp_wow = sum(!is.na(crps_temp_wow_max)),
+      n_wbgt_knmi = sum(!is.na(crps_wbgt_knmi)),
+      n_wbgt_wow = sum(!is.na(crps_wbgt_wow_max)),
+      temp_knmi_mean = mean(crps_temp_knmi, na.rm = TRUE),
+      temp_wow_max_mean = mean(crps_temp_wow_max, na.rm = TRUE),
+      wbgt_knmi_mean = mean(crps_wbgt_knmi, na.rm = TRUE),
+      wbgt_wow_max_mean = mean(crps_wbgt_wow_max, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    mutate(across(where(is.numeric) & !c(n_total, n_temp_knmi, n_temp_wow, 
+                                          n_wbgt_knmi, n_wbgt_wow), ~round(., 3)))
+  
+  # Summarize Brier scores if available
+  if(nrow(combined_brier) > 0) {
+    brier_table <- combined_brier %>%
+      group_by(city, threshold) %>%
+      summarise(
+        n_obs = n(),
+        bs_wbgt_knmi_mean = mean(bs_wbgt_knmi, na.rm = TRUE),
+        bs_wbgt_wow_max_mean = mean(bs_wbgt_wow_max, na.rm = TRUE),
+        .groups = 'drop'
+      ) %>%
+      mutate(across(where(is.numeric) & !n_obs, ~round(., 4)))
+  }
+  
+  # Create Temperature CRPS visualization
+  plot_temp <- combined_crps %>%
+    select(city, season, starts_with("crps_temp")) %>%
+    pivot_longer(cols = starts_with("crps_temp"),
+                 names_to = "Type",
+                 values_to = "CRPS") %>%
+    filter(!is.na(CRPS)) %>%
+    mutate(Type = case_when(
+      Type == "crps_temp_knmi" ~ "KNMI (avg)",
+      Type == "crps_temp_wow_max" ~ "WOW (max)",
+      TRUE ~ Type
+    )) %>%
+    ggplot(aes(x = season, y = CRPS, fill = Type)) +
+    geom_violin(position = position_dodge(width = 0.9), 
+                alpha = 0.6, trim = FALSE) +
+    geom_boxplot(position = position_dodge(width = 0.9),
+                 width = 0.2, alpha = 0.8,
+                 outlier.size = 0.5) +
+    facet_wrap(~city, ncol = 2) +
+    scale_fill_manual(values = c("KNMI (avg)" = "#2166AC", 
+                                  "WOW (max)" = "#92C5DE")) +
+    coord_cartesian(ylim = c(0, 6)) +  # Limit y-axis for better visibility
+    theme_minimal(base_size = 11) +
+    labs(x = "Season", y = "CRPS (°C)", fill = "Data Source") +
+    theme(legend.position = "right",
+          legend.direction = "vertical",
+          strip.text = element_text(face = "bold", size = 12))
+  
+  # Create WBGT CRPS visualization
+  plot_wbgt <- combined_crps %>%
+    select(city, season, starts_with("crps_wbgt")) %>%
+    pivot_longer(cols = starts_with("crps_wbgt"),
+                 names_to = "Type",
+                 values_to = "CRPS") %>%
+    filter(!is.na(CRPS)) %>%
+    mutate(Type = case_when(
+      Type == "crps_wbgt_knmi" ~ "KNMI (avg)",
+      Type == "crps_wbgt_wow_max" ~ "WOW (max)",
+      TRUE ~ Type
+    )) %>%
+    ggplot(aes(x = season, y = CRPS, fill = Type)) +
+    geom_violin(position = position_dodge(width = 0.9), 
+                alpha = 0.6, trim = FALSE) +
+    geom_boxplot(position = position_dodge(width = 0.9),
+                 width = 0.2, alpha = 0.8,
+                 outlier.size = 0.5) +
+    facet_wrap(~city, ncol = 2) +
+    scale_fill_manual(values = c("KNMI (avg)" = "#D6604D", 
+                                  "WOW (max)" = "#FDDBC7")) +
+    coord_cartesian(ylim = c(0, 12)) +  # Adjusted for WBGT range
+    theme_minimal(base_size = 11) +
+    labs(x = "Season", y = "CRPS (°C)", fill = "Data Source") +
+    theme(legend.position = "right",
+          legend.direction = "vertical",
+          strip.text = element_text(face = "bold", size = 12))
+  
+  # Combine plots with patchwork
+  combined_plot <- plot_temp / plot_wbgt +
+    plot_annotation(
+      title = sprintf("CRPS Comparison (Lead time = %d hrs)", lead_time),
+      subtitle = "Temperature (top) and WBGT (bottom)",
+      theme = theme(plot.title = element_text(size = 14, face = "bold", hjust = 0.5),
+                    plot.subtitle = element_text(size = 12, hjust = 0.5))
+    )
+  
+  # Print summary statistics to console
+  cat("\n========================================\n")
+  cat("CRPS COMPARISON - Overall Statistics\n")
+  cat("========================================\n")
+  print(overall_table)
+  
+  cat("\n========================================\n")
+  cat("CRPS COMPARISON - By Season\n")
+  cat("========================================\n")
+  print(comparison_table)
+  
+  if(exists("brier_table")) {
+    cat("\n========================================\n")
+    cat(sprintf("BRIER SCORE COMPARISON - Threshold: %s°C\n", 
+                paste(thresholds, collapse=", ")))
+    cat("========================================\n")
+    print(brier_table)
+  }
+  
+  # Display combined plot
+  print(combined_plot)
+  
+  # Return all results as a list
+  return(list(
+    crps_data = combined_crps,        # Raw CRPS data
+    brier_data = combined_brier,      # Raw Brier Score data
+    overall_stats = overall_table,    # Overall statistics by city
+    seasonal_stats = comparison_table,# Seasonal statistics
+    brier_stats = if(exists("brier_table")) brier_table else NULL,
+    plot = combined_plot              # Combined visualization
+  ))
+}
+
+# Execute the analysis for Amsterdam and Rotterdam
+results_comparison <- compare_cities_crps(
+  data_list = list(data_amsterdam, data_rotterdam),
+  city_names = c("Amsterdam", "Rotterdam"),
+  lead_time = 24,     # 24-hour ahead forecasts
+  n_times = Inf,      # Process all available time points
+  thresholds = c(27)  # 27°C WBGT threshold for heat stress
+)
+
+# Access individual components
+# results_comparison$overall_stats    # Overall statistics
+# results_comparison$seasonal_stats   # Seasonal breakdown
+#results_comparison$plot             # Visualization
+```
+#Station Mapping
+```{r}
+# Function 1: Basic Station Map with Temperature/WBGT Distribution
+plot_station_temperature_map <- function(data, 
+                                        city_name = NULL,
+                                        time_point = NULL, 
+                                        variable = "temperature",
+                                        include_wow = TRUE) {
+  
+  # Select time point
+  if(is.null(time_point)) {
+    plot_data <- data %>%
+      filter(!is.na(WBGT_C)) %>%
+      slice(1)
+  } else {
+    plot_data <- data %>%
+      filter(Valid_datetime == time_point)
+  }
+  
+  if(nrow(plot_data) == 0) {
+    stop("No data available for the specified time point")
+  }
+  
+  # Auto-detect city name if not provided
+  if(is.null(city_name)) {
+    city_name <- plot_data$nearest_city[1]
+  }
+  
+  # Get Netherlands map
+  netherlands <- ne_countries(scale = "large", country = "Netherlands", returnclass = "sf")
+  
+  # Initialize stations dataframe
+  stations_df <- data.frame()
+  
+  # Select which variable to plot
+  if(variable == "temperature") {
+    knmi_value <- plot_data$T_DRYB_10[1]
+    grid_value <- plot_data$Temperature_C[1]
+    color_label <- "Temperature (°C)"
+    midpoint_val <- 15
+  } else {
+    knmi_value <- plot_data$WBGT_obs_10[1]
+    grid_value <- plot_data$WBGT_C[1]
+    color_label <- "WBGT (°C)"
+    midpoint_val <- 20
+  }
+  
+  # Debug: Print KNMI value
+  if(is.na(knmi_value)) {
+    cat("Note: KNMI", ifelse(variable == "temperature", "temperature", "WBGT"), 
+        "value is NA for station", plot_data$station_id[1], "\n")
+  }
+  
+  # Add city center
+  stations_df <- rbind(stations_df, data.frame(
+    lon = plot_data$nearest_city_lon[1],
+    lat = plot_data$nearest_city_lat[1],
+    type = "City Center",
+    name = city_name,
+    value = NA,
+    distance_km = 0,
+    data_source = "Reference"
+  ))
+  
+  # Add KNMI station
+  if(!is.na(knmi_value)) {
+    stations_df <- rbind(stations_df, data.frame(
+      lon = plot_data$station_lon[1],
+      lat = plot_data$station_lat[1],
+      type = "KNMI Station",
+      name = paste("KNMI", plot_data$station_id[1]),
+      value = knmi_value,
+      distance_km = plot_data$nearest_city_distance_km[1],
+      data_source = "Official"
+    ))
+  } else {
+    stations_df <- rbind(stations_df, data.frame(
+      lon = plot_data$station_lon[1],
+      lat = plot_data$station_lat[1],
+      type = "KNMI Station",
+      name = paste("KNMI", plot_data$station_id[1]),
+      value = NA,
+      distance_km = plot_data$nearest_city_distance_km[1],
+      data_source = "Official"
+    ))
+  }
+  
+  # Add gridpoint
+  stations_df <- rbind(stations_df, data.frame(
+    lon = plot_data$gridpoint_lon[1],
+    lat = plot_data$gridpoint_lat[1],
+    type = "Model Gridpoint",
+    name = paste("Grid", plot_data$Gridpoint_ID[1]),
+    value = grid_value,
+    distance_km = plot_data$gridpoint_to_station_dist[1],
+    data_source = "Model"
+  ))
+  
+  # Add WOW stations if requested and available
+  if(include_wow && !is.na(plot_data$wow_data_available[1]) && plot_data$wow_data_available[1] == TRUE) {
+    for(i in 1:5) {
+      wow_id_col <- paste0("wow_station_", i, "_ExternalSiteId")
+      wow_lat_col <- paste0("wow_station_", i, "_Latitude")
+      wow_lon_col <- paste0("wow_station_", i, "_Longitude")
+      wow_val_col <- if(variable == "temperature") {
+        paste0("wow_station_", i, "_station_temp")
+      } else {
+        paste0("wow_station_", i, "_station_wbgt")
+      }
+      
+      if(wow_id_col %in% names(plot_data) && 
+         !is.na(plot_data[[wow_id_col]][1]) && 
+         !is.na(plot_data[[wow_val_col]][1])) {
+        stations_df <- rbind(stations_df, data.frame(
+          lon = plot_data[[wow_lon_col]][1],
+          lat = plot_data[[wow_lat_col]][1],
+          type = "WOW Station",
+          name = paste0("WOW", i),
+          value = plot_data[[wow_val_col]][1],
+          distance_km = NA,
+          data_source = "Citizen"
+        ))
+      }
+    }
+  }
+  
+  # Calculate map bounds
+  lon_range <- range(stations_df$lon, na.rm = TRUE)
+  lat_range <- range(stations_df$lat, na.rm = TRUE)
+  
+  # Add buffer
+  lon_buffer <- diff(lon_range) * 0.3
+  lat_buffer <- diff(lat_range) * 0.3
+  
+  # Get city center coordinates for connections
+  city_center <- stations_df[stations_df$type == "City Center", ]
+  
+  # Create the plot
+  p <- ggplot() +
+    # Netherlands background
+    geom_sf(data = netherlands, fill = "lightgray", color = "darkgray", alpha = 0.5) +
+    coord_sf(xlim = lon_range + c(-lon_buffer, lon_buffer),
+             ylim = lat_range + c(-lat_buffer, lat_buffer)) +
+    
+    # Add connections to city center
+    geom_segment(data = stations_df[stations_df$type != "City Center",],
+                 aes(x = city_center$lon[1],
+                     y = city_center$lat[1],
+                     xend = lon, yend = lat),
+                 color = "gray70", linetype = "dashed", alpha = 0.3) +
+    
+    # Add stations
+    geom_point(data = stations_df,
+               aes(x = lon, y = lat, 
+                   color = value, 
+                   shape = type, 
+                   size = type),
+               stroke = 1.5) +
+    
+    # Add value labels with ggrepel
+    ggrepel::geom_text_repel(
+      data = stations_df[!is.na(stations_df$value),],
+      aes(x = lon, y = lat, 
+          label = sprintf("%.1f°C", value)),
+      size = 3, 
+      fontface = "bold",
+      box.padding = 0.5,
+      point.padding = 0.3,
+      segment.color = 'grey50',
+      segment.size = 0.2,
+      max.overlaps = Inf,
+      seed = 42,  # For reproducible positioning
+      nudge_y = 0.01
+    ) +
+    
+    # Add station names with ggrepel
+    ggrepel::geom_label_repel(
+      data = stations_df,
+      aes(x = lon, y = lat, label = name),
+      size = 2.5, 
+      alpha = 0.9,
+      box.padding = 0.35,
+      point.padding = 0.3,
+      label.padding = 0.15,
+      segment.color = 'grey70',
+      segment.size = 0.2,
+      max.overlaps = Inf,
+      seed = 42,
+      nudge_y = -0.015,
+      fill = "white"
+    ) +
+    
+    # Color scale
+    scale_color_gradient2(
+      low = "blue", mid = "yellow", high = "red",
+      midpoint = midpoint_val,
+      name = color_label,
+      na.value = "gray50",
+      limits = c(min(stations_df$value, na.rm = TRUE) - 2,
+                 max(stations_df$value, na.rm = TRUE) + 2)
+    ) +
+    
+    # Shape and size scales
+    scale_shape_manual(
+      values = c("City Center" = 15, 
+                 "KNMI Station" = 17, 
+                 "Model Gridpoint" = 16,
+                 "WOW Station" = 19),
+      name = "Station Type"
+    ) +
+    scale_size_manual(
+      values = c("City Center" = 6, 
+                 "KNMI Station" = 5, 
+                 "Model Gridpoint" = 4,
+                 "WOW Station" = 3.5),
+      guide = "none"
+    ) +
+    
+    # Labels and theme
+    labs(
+      title = sprintf("%s Distribution across %s Weather Stations", 
+                     ifelse(variable == "temperature", "Temperature", "WBGT"), 
+                     city_name),
+      subtitle = sprintf("Time: %s | WOW Coverage: %.0f%% | Quality: %s",
+                        format(plot_data$Valid_datetime[1], "%Y-%m-%d %H:%M"),
+                        ifelse(is.na(plot_data$wow_coverage[1]), 0, plot_data$wow_coverage[1] * 100),
+                        ifelse(is.na(plot_data$wow_data_quality[1]), "N/A", plot_data$wow_data_quality[1])),
+      x = "Longitude",
+      y = "Latitude",
+      caption = "Data sources: KNMI official stations, ECMWF model gridpoints, WOW citizen stations"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "right",
+      panel.grid.major = element_line(color = "gray90", linewidth = 0.3),
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 10)
+    )
+  
+  return(p)
+}
+
+# Function 2: Simple Heat Map without interpolation
+plot_temperature_heatmap_simple <- function(data, 
+                                           city_name = NULL,
+                                           time_point = NULL,
+                                           variable = "wbgt") {
+  
+  # Select time point
+  if(is.null(time_point)) {
+    plot_data <- data %>%
+      filter(!is.na(wow_data_available) & wow_data_available == TRUE) %>%
+      slice(1)
+  } else {
+    plot_data <- data %>%
+      filter(Valid_datetime == time_point)
+  }
+  
+  if(nrow(plot_data) == 0) {
+    warning("No data with WOW stations available for the specified time point")
+    return(NULL)
+  }
+  
+  # Auto-detect city name
+  if(is.null(city_name)) {
+    city_name <- plot_data$nearest_city[1]
+  }
+  
+  # Collect all station data
+  stations_df <- data.frame()
+  
+  # Select variable
+  if(variable == "temperature") {
+    knmi_val <- plot_data$T_DRYB_10[1]
+    grid_val <- plot_data$Temperature_C[1]
+    var_label <- "Temperature (°C)"
+  } else {
+    knmi_val <- plot_data$WBGT_obs_10[1]
+    grid_val <- plot_data$WBGT_C[1]
+    var_label <- "WBGT (°C)"
+  }
+  
+  # Add city center
+  stations_df <- rbind(stations_df, data.frame(
+    lon = plot_data$nearest_city_lon[1],
+    lat = plot_data$nearest_city_lat[1],
+    value = NA,
+    type = "City Center",
+    label = city_name
+  ))
+  
+  # Add KNMI station
+  stations_df <- rbind(stations_df, data.frame(
+    lon = plot_data$station_lon[1],
+    lat = plot_data$station_lat[1],
+    value = knmi_val,
+    type = "KNMI",
+    label = plot_data$station_id[1]
+  ))
+  
+  # Add gridpoint
+  stations_df <- rbind(stations_df, data.frame(
+    lon = plot_data$gridpoint_lon[1],
+    lat = plot_data$gridpoint_lat[1],
+    value = grid_val,
+    type = "Model",
+    label = paste("Grid", plot_data$Gridpoint_ID[1])
+  ))
+  
+  # Add WOW stations
+  for(i in 1:5) {
+    wow_lon <- plot_data[[paste0("wow_station_", i, "_Longitude")]][1]
+    wow_lat <- plot_data[[paste0("wow_station_", i, "_Latitude")]][1]
+    wow_val <- if(variable == "temperature") {
+      plot_data[[paste0("wow_station_", i, "_station_temp")]][1]
+    } else {
+      plot_data[[paste0("wow_station_", i, "_station_wbgt")]][1]
+    }
+    
+    if(!is.na(wow_lon) && !is.na(wow_lat) && !is.na(wow_val)) {
+      stations_df <- rbind(stations_df, data.frame(
+        lon = wow_lon,
+        lat = wow_lat,
+        value = wow_val,
+        type = "WOW",
+        label = paste0("WOW", i)
+      ))
+    }
+  }
+  
+  # Calculate bounds
+  lon_range <- range(stations_df$lon, na.rm = TRUE)
+  lat_range <- range(stations_df$lat, na.rm = TRUE)
+  lon_buffer <- diff(lon_range) * 0.2
+  lat_buffer <- diff(lat_range) * 0.2
+  
+  # Create plot with better text positioning
+  p <- ggplot(stations_df) +
+    # Add points with size proportional to value
+    geom_point(data = stations_df[!is.na(stations_df$value),],
+               aes(x = lon, y = lat, 
+                   color = value, 
+                   size = value),
+               alpha = 0.7) +
+    
+    # Add city center
+    geom_point(data = stations_df[stations_df$type == "City Center",],
+               aes(x = lon, y = lat),
+               color = "red", shape = 18, size = 5) +
+    
+    # Use ggrepel for station labels
+    ggrepel::geom_label_repel(
+      data = stations_df,
+      aes(x = lon, y = lat, label = label),
+      size = 2.5,
+      box.padding = 0.35,
+      point.padding = 0.3,
+      segment.color = 'grey50',
+      segment.size = 0.2,
+      max.overlaps = Inf,
+      alpha = 0.9,
+      seed = 42,
+      fill = "white"
+    ) +
+    
+    # Use ggrepel for value labels
+    ggrepel::geom_text_repel(
+      data = stations_df[!is.na(stations_df$value),],
+      aes(x = lon, y = lat, 
+          label = sprintf("%.1f°C", value)),
+      size = 3, 
+      fontface = "bold",
+      box.padding = 0.25,
+      point.padding = 0.25,
+      segment.color = 'grey30',
+      segment.size = 0.2,
+      max.overlaps = Inf,
+      seed = 42
+    ) +
+    
+    # Color scale
+    scale_color_gradient2(
+      low = "blue", mid = "yellow", high = "red",
+      midpoint = ifelse(variable == "temperature", 15, 20),
+      name = var_label
+    ) +
+    
+    scale_size_continuous(
+      range = c(5, 15),
+      guide = "none"
+    ) +
+    
+    # Labels and theme
+    labs(
+      title = sprintf("%s Distribution - %s", var_label, city_name),
+      subtitle = sprintf("Time: %s | %d stations reporting",
+                        format(plot_data$Valid_datetime[1], "%Y-%m-%d %H:%M"),
+                        sum(!is.na(stations_df$value))),
+      x = "Longitude",
+      y = "Latitude",
+      caption = "Red diamond: city center | Circle size: value magnitude"
+    ) +
+    coord_fixed(ratio = 1.3) +
+    xlim(lon_range[1] - lon_buffer, lon_range[2] + lon_buffer) +
+    ylim(lat_range[1] - lat_buffer, lat_range[2] + lat_buffer) +
+    theme_minimal() +
+    theme(
+      panel.grid.major = element_line(color = "gray90"),
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", size = 14)
+    )
+  
+  return(p)
+}
+
+# Function 3: Time Series Comparison Plot (保持不变)
+plot_station_timeseries <- function(data, 
+                                   city_name = NULL,
+                                   hours_to_plot = 24) {
+  
+  # Auto-detect city name
+  if(is.null(city_name)) {
+    city_name <- unique(data$nearest_city)[1]
+  }
+  
+  # Filter to recent hours
+  latest_time <- max(data$Valid_datetime, na.rm = TRUE)
+  start_time <- latest_time - (hours_to_plot * 3600)
+  
+  plot_data <- data %>%
+    filter(Valid_datetime >= start_time & Valid_datetime <= latest_time)
+  
+  # Prepare long format data for plotting
+  time_series_data <- plot_data %>%
+    select(Valid_datetime, 
+           KNMI = WBGT_obs_10,
+           Model = WBGT_C,
+           WOW_Mean = wow_wbgt_mean,
+           WOW_Max = wow_wbgt_max) %>%
+    pivot_longer(cols = -Valid_datetime,
+                names_to = "Source",
+                values_to = "WBGT")
+  
+  # Create time series plot
+  p <- ggplot(time_series_data, aes(x = Valid_datetime, y = WBGT)) +
+    geom_line(aes(color = Source), linewidth = 1.2, na.rm = TRUE) +
+    geom_point(aes(color = Source, shape = Source), size = 2, na.rm = TRUE) +
+    
+    scale_color_manual(values = c("KNMI" = "darkgreen",
+                                  "Model" = "blue",
+                                  "WOW_Mean" = "purple",
+                                  "WOW_Max" = "red")) +
+    
+    labs(title = sprintf("WBGT Time Series Comparison - %s", city_name),
+         subtitle = sprintf("Last %d hours | Mean WOW stations: %.1f",
+                           hours_to_plot,
+                           mean(plot_data$wow_n_stations, na.rm = TRUE)),
+         x = "Time",
+         y = "WBGT (°C)",
+         color = "Data Source",
+         shape = "Data Source") +
+    
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  # Add uncertainty band if data is available
+  if(all(c("wow_wbgt_min", "wow_wbgt_max") %in% names(plot_data))) {
+    ribbon_data <- plot_data %>%
+      filter(!is.na(wow_wbgt_min) & !is.na(wow_wbgt_max))
+    
+    if(nrow(ribbon_data) > 0) {
+      p <- p + geom_ribbon(data = ribbon_data,
+                          aes(x = Valid_datetime,
+                              ymin = wow_wbgt_min,
+                              ymax = wow_wbgt_max),
+                          alpha = 0.2, fill = "purple",
+                          inherit.aes = FALSE)
+    }
+  }
+  
+  return(p)
+}
+
+# Function 4: Comparison plot between two cities (保持不变)
+plot_cities_comparison <- function(data1, data2, 
+                                  city1_name = NULL, 
+                                  city2_name = NULL,
+                                  variable = "wbgt") {
+  
+  # Auto-detect city names
+  if(is.null(city1_name)) city1_name <- unique(data1$nearest_city)[1]
+  if(is.null(city2_name)) city2_name <- unique(data2$nearest_city)[1]
+  
+  # Select variable
+  var_col <- ifelse(variable == "temperature", "T_DRYB_10", "WBGT_obs_10")
+  var_label <- ifelse(variable == "temperature", "Temperature (°C)", "WBGT (°C)")
+  
+  # Prepare data
+  data1_subset <- data1 %>%
+    select(Valid_datetime, value = !!sym(var_col)) %>%
+    mutate(City = city1_name)
+  
+  data2_subset <- data2 %>%
+    select(Valid_datetime, value = !!sym(var_col)) %>%
+    mutate(City = city2_name)
+  
+  combined_data <- rbind(data1_subset, data2_subset)
+  
+  # Create comparison plot
+  p <- ggplot(combined_data, aes(x = Valid_datetime, y = value, color = City)) +
+    geom_line(linewidth = 1.2, na.rm = TRUE) +
+    geom_point(size = 1.5, alpha = 0.6, na.rm = TRUE) +
+    
+    scale_color_manual(values = c("blue", "red")) +
+    
+    labs(title = sprintf("%s Comparison: %s vs %s", 
+                        var_label, city1_name, city2_name),
+         x = "Time",
+         y = var_label) +
+    
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  return(p)
+}
+
+# Wrapper function to create all maps for a city
+create_city_analysis_maps <- function(data, city_name = NULL, time_point = NULL) {
+  
+  # Create a list to store all plots
+  plots <- list()
+  
+  # Temperature map
+  plots$temp_map <- plot_station_temperature_map(
+    data, 
+    city_name = city_name,
+    time_point = time_point,
+    variable = "temperature",
+    include_wow = TRUE
+  )
+  
+  # WBGT map
+  plots$wbgt_map <- plot_station_temperature_map(
+    data, 
+    city_name = city_name,
+    time_point = time_point,
+    variable = "wbgt",
+    include_wow = TRUE
+  )
+  
+  # Simple heat map
+  plots$heatmap <- plot_temperature_heatmap_simple(
+    data,
+    city_name = city_name,
+    time_point = time_point,
+    variable = "wbgt"
+  )
+  
+  # Time series
+  plots$timeseries <- plot_station_timeseries(
+    data,
+    city_name = city_name,
+    hours_to_plot = 24
+  )
+  
+  return(plots)
+}
+
+# 使用示例
+time_point <- as.POSIXct("2023-07-09 12:00:00", tz = "UTC")
+
+# 创建地图
+rotterdam_maps <- create_city_analysis_maps(
+  data_rotterdam,
+  city_name = "Rotterdam", 
+  time_point = time_point
+)
+
+amsterdam_maps <- create_city_analysis_maps(
+  data_amsterdam,
+  city_name = "Amsterdam",
+  time_point = time_point
+)
+
+# 显示地图
+print(amsterdam_maps$temp_map)
+print(amsterdam_maps$wbgt_map)
+print(amsterdam_maps$heatmap)
+print(amsterdam_maps$timeseries)
+```
+
+
+#post processing
+#splite test and train
+```{r}
+# Define train/test split
+training_period <- 30  # days for rolling window training
+validation_start <- "2021-07-01"  # Start of validation period
+test_start <- "2021-08-01"  # Start of test period
+
+# Split data function
+split_data <- function(data, lead_time = 6) {
+  data_filtered <- data %>%
+    filter(lead_time_hrs == lead_time) %>%
+    arrange(Valid_datetime)
+  
+  # Define periods
+  data_split <- data_filtered %>%
+    mutate(
+      period = case_when(
+        Valid_datetime < as.POSIXct(validation_start) ~ "train",
+        Valid_datetime >= as.POSIXct(validation_start) & 
+          Valid_datetime < as.POSIXct(test_start) ~ "validation",
+        TRUE ~ "test"
+      )
+    )
+  
+  return(data_split)
+}
+```
+
+#Core crps
+```{r}
+# CRPS for normal distribution
+# Core CRPS functions
+# Core CRPS functions
+crps.norm <- function(obs, mu, sd) {
+  if(sd <= 0) sd <- 1e-6
+  sd * ((obs - mu) / sd * (2 * pnorm((obs - mu) / sd) - 1) + 
+        2 * dnorm((obs - mu) / sd) - 1 / sqrt(pi))
+}
+
+# Vectorized version for multiple inputs
+crps.norm.vec <- function(obs, mu, sd) {
+  sd <- pmax(sd, 1e-6)  # Ensure all sd values are positive
+  sd * ((obs - mu) / sd * (2 * pnorm((obs - mu) / sd) - 1) + 
+        2 * dnorm((obs - mu) / sd) - 1 / sqrt(pi))
+}
+
+crps.ensemble <- function(obs, fcst) {
+  fcst <- sort(fcst)
+  fun.ecdf <- ecdf(fcst)
+  diff <- diff(sort(c(fcst, obs)))
+  cdfs <- fun.ecdf(sort(c(fcst, obs)))[1:length(fcst)]
+  crps <- sum((cdfs - (fcst > obs))^2 * diff)
+  return(crps)
+}
+
+# CRPS for optimization (EMOS)
+crps.normal <- function(param, t.obs, t.ens, t.var, K) {
+  param[-1] <- param[-1]^2
+  
+  if(is.matrix(t.ens)) {
+    MEAN <- as.vector(t.ens %*% param[1:K])
+  } else {
+    MEAN <- param[1] + param[2] * t.ens
+  }
+  
+  VAR <- param[K + 1] + param[K + 2] * t.var
+  VAR[VAR <= 0] <- 1e-6
+  SIGMA <- sqrt(VAR)
+  
+  obs.stdz <- (t.obs - MEAN) / SIGMA
+  crps.obs <- SIGMA * (obs.stdz * (2 * pnorm(obs.stdz, 0, 1) - 1) + 
+                       2 * dnorm(obs.stdz, 0, 1) - 1 / sqrt(pi))
+  
+  return(sum(crps.obs, na.rm = TRUE))
+}
+crps.normal <- cmpfun(crps.normal)
+
+calculate_rmse <- function(obs, pred) {
+  sqrt(mean((obs - pred)^2, na.rm = TRUE))
+}
+```
+
+# AUC ROC
+```{r}
+# Compare CRPS distributions across methods
+plot_crps_distributions <- function(results) {
+  
+  library(ggplot2)
+  library(dplyr)
+  
+  # Create violin plot for CRPS distributions
+  p1 <- ggplot(results, aes(x = method, y = crps, fill = method)) +
+    geom_violin(alpha = 0.7) +
+    geom_boxplot(width = 0.2, alpha = 0.9) +
+    facet_grid(obs_type ~ city) +
+    scale_fill_manual(values = c("EMOS" = "#2ca02c",
+                                "QR" = "#ff7f0e",
+                                "RF" = "#1f77b4")) +
+    labs(title = "CRPS Distribution by Post-Processing Method",
+         subtitle = "Lower values indicate better performance",
+         x = "Method", 
+         y = "CRPS") +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+  print(p1)
+}
+```
+
+#Method 1: Quantile Regression (QR)
+```{r}
+# Quantile Regression
+run_quantile_regression <- function(data, obs_column = "WBGT_obs_10", 
+                                   lead_time = 6, training_days = 30,
+                                   quantiles = seq(0.05, 0.95, 0.05)) {
+  
+  data <- data %>% filter(lead_time_hrs == lead_time)
+  
+  data_agg <- data %>%
+    group_by(Valid_datetime, season) %>%
+    reframe(
+      ens_mean = mean(WBGT_C, na.rm = TRUE),
+      ens_spread = sd(WBGT_C, na.rm = TRUE),
+      obs = first(!!sym(obs_column))
+    ) %>%
+    distinct() %>%
+    filter(!is.na(obs), !is.na(ens_mean)) %>%
+    arrange(Valid_datetime)
+  
+  n_points <- nrow(data_agg)
+  results_list <- list()
+  
+  for(i in (training_days + 1):n_points) {
+    train_idx <- max(1, i - training_days):(i - 1)
+    train_data <- data_agg[train_idx, ]
+    test_point <- data_agg[i, ]
+    
+    if(nrow(train_data) < 10) next
+    
+    pred_quantiles <- numeric(length(quantiles))
+    
+    for(q_idx in seq_along(quantiles)) {
+      q <- quantiles[q_idx]
+      
+      qr_fit <- tryCatch({
+        rq(obs ~ ens_mean + ens_spread, data = train_data, tau = q)
+      }, error = function(e) NULL)
+      
+      if(!is.null(qr_fit)) {
+        pred_quantiles[q_idx] <- predict(qr_fit, newdata = test_point)
+      } else {
+        pred_quantiles[q_idx] <- quantile(train_data$obs, q)
+      }
+    }
+    
+    pred_mean <- mean(pred_quantiles, na.rm = TRUE)
+    pred_sd <- sd(pred_quantiles, na.rm = TRUE)
+    if(is.na(pred_sd) || pred_sd < 0.1) pred_sd <- sd(train_data$obs, na.rm = TRUE)
+    
+    results_list[[length(results_list) + 1]] <- data.frame(
+      time = test_point$Valid_datetime,
+      obs = test_point$obs,
+      pred_mean = pred_mean,
+      pred_sd = pred_sd,
+      pred_quantiles = I(list(pred_quantiles)),
+      method = "QR",
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  if(length(results_list) > 0) {
+    return(bind_rows(results_list))
+  } else {
+    return(NULL)
+  }
+}
+```
+
+#Method 2: Random Forest (RF)
+```{r}
+run_random_forest <- function(data, obs_column = "WBGT_obs_10", 
+                             lead_time = 6, training_days = 30,
+                             n_trees = 100) {
+  
+  data <- data %>% filter(lead_time_hrs == lead_time)
+  
+  data_features <- data %>%
+    group_by(Valid_datetime, season) %>%
+    reframe(
+      ens_mean = mean(WBGT_C, na.rm = TRUE),
+      ens_median = median(WBGT_C, na.rm = TRUE),
+      ens_sd = sd(WBGT_C, na.rm = TRUE),
+      ens_min = min(WBGT_C, na.rm = TRUE),
+      ens_max = max(WBGT_C, na.rm = TRUE),
+      ens_q25 = quantile(WBGT_C, 0.25, na.rm = TRUE),
+      ens_q75 = quantile(WBGT_C, 0.75, na.rm = TRUE),
+      obs = first(!!sym(obs_column)),
+      hour = lubridate::hour(first(Valid_datetime)),
+      month = lubridate::month(first(Valid_datetime))
+    ) %>%
+    distinct() %>%
+    filter(!is.na(obs), !is.na(ens_mean)) %>%
+    arrange(Valid_datetime)
+  
+  n_points <- nrow(data_features)
+  results_list <- list()
+  
+  for(i in (training_days + 1):n_points) {
+    train_idx <- max(1, i - training_days):(i - 1)
+    train_data <- data_features[train_idx, ]
+    test_point <- data_features[i, ]
+    
+    if(nrow(train_data) < 20) next
+    
+    n_unique <- length(unique(train_data$obs))
+    
+    if(n_unique >= 10) {
+      features <- c("ens_mean", "ens_sd", "ens_min", "ens_max", "hour", "month")
+      
+      rf_model <- tryCatch({
+        suppressWarnings(
+          randomForest(
+            formula = as.formula(paste("obs ~", paste(features, collapse = "+"))),
+            data = train_data,
+            ntree = n_trees,
+            mtry = 3
+          )
+        )
+      }, error = function(e) NULL)
+      
+      if(!is.null(rf_model)) {
+        pred_mean <- predict(rf_model, newdata = test_point)
+        pred_sd <- sqrt(mean(rf_model$mse))
+      } else {
+        lm_model <- lm(obs ~ ens_mean + ens_sd, data = train_data)
+        pred_mean <- predict(lm_model, newdata = test_point)
+        pred_sd <- sigma(lm_model)
+      }
+    } else {
+      lm_model <- lm(obs ~ ens_mean, data = train_data)
+      pred_mean <- predict(lm_model, newdata = test_point)
+      pred_sd <- sigma(lm_model)
+    }
+    
+    results_list[[length(results_list) + 1]] <- data.frame(
+      time = test_point$Valid_datetime,
+      obs = test_point$obs,
+      pred_mean = as.numeric(pred_mean),
+      pred_sd = pred_sd,
+      method = "RF",
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  if(length(results_list) > 0) {
+    return(bind_rows(results_list))
+  } else {
+    return(NULL)
+  }
+}
+```
+
+#Method 3: EMOS (Ensemble Model Output Statistics)
+```{r}
+run_emos <- function(data, obs_column = "WBGT_obs_10", 
+                    lead_time = 6, training_days = 30) {
+  
+  data <- data %>% filter(lead_time_hrs == lead_time)
+  
+  data_agg <- data %>%
+    group_by(Valid_datetime, season) %>%
+    reframe(
+      ens_mean = mean(WBGT_C, na.rm = TRUE),
+      ens_var = var(WBGT_C, na.rm = TRUE),
+      obs = first(!!sym(obs_column)),
+      ens_values = list(WBGT_C)
+    ) %>%
+    distinct() %>%
+    filter(!is.na(obs), !is.na(ens_mean)) %>%
+    arrange(Valid_datetime)
+  
+  n_times <- nrow(data_agg)
+  results_list <- list()
+  
+  for(i in (training_days + 1):n_times) {
+    train_idx <- max(1, i - training_days):(i - 1)
+    train_data <- data_agg[train_idx, ]
+    valid_data <- data_agg[i, ]
+    
+    if(nrow(train_data) < 10) next
+    
+    lm_fit <- lm(obs ~ ens_mean, data = train_data)
+    
+    a_init <- coef(lm_fit)[1]
+    if(is.na(a_init)) a_init <- 0
+    b_init <- coef(lm_fit)[2]
+    if(is.na(b_init) || b_init < 0.1) b_init <- 1
+    
+    c_init <- var(residuals(lm_fit))
+    if(is.na(c_init) || c_init < 0.1) c_init <- 1
+    d_init <- 0.5
+    
+    params_init <- c(a_init, sqrt(b_init), sqrt(c_init), sqrt(d_init))
+    
+    t_obs <- train_data$obs
+    t_ens <- as.matrix(cbind(1, train_data$ens_mean))
+    t_var <- train_data$ens_var
+    
+    opt_result <- tryCatch({
+      optim(params_init, crps.normal,
+            t.obs = t_obs,
+            t.ens = t_ens,
+            t.var = t_var,
+            K = 2,
+            method = "BFGS",
+            control = list(maxit = 500))
+    }, error = function(e) NULL)
+    
+    if(is.null(opt_result)) {
+      pred_mean <- a_init + b_init * valid_data$ens_mean
+      pred_sd <- sqrt(c_init)
+    } else {
+      params <- opt_result$par
+      params[-1] <- params[-1]^2
+      
+      pred_mean <- params[1] + params[2] * valid_data$ens_mean
+      pred_var <- params[3] + params[4] * valid_data$ens_var
+      pred_sd <- sqrt(max(pred_var, 0.1))
+    }
+    
+    results_list[[length(results_list) + 1]] <- data.frame(
+      time = valid_data$Valid_datetime,
+      obs = valid_data$obs,
+      pred_mean = pred_mean,
+      pred_sd = pred_sd,
+      method = "EMOS",
+      stringsAsFactors = FALSE
+    )
+  }
+  
+  if(length(results_list) > 0) {
+    return(bind_rows(results_list))
+  } else {
+    return(NULL)
+  }
+}
+```
+
+#Main Analysis Function with WOW Comparison
+```{r}
+# Main analysis comparing all methods to WOW max
+analyze_vs_wow <- function(data_amsterdam, data_rotterdam, 
+                          lead_time = 6, training_days = 30) {
+  
+  cat("\n================================================\n")
+  cat("   WBGT Analysis: Post-Processing vs WOW Max    \n")
+  cat("================================================\n\n")
+  
+  all_results <- list()
+  
+  for(city in c("Amsterdam", "Rotterdam")) {
+    
+    data <- if(city == "Amsterdam") data_amsterdam else data_rotterdam
+    data_filtered <- data %>% filter(lead_time_hrs == lead_time)
+    
+    cat(sprintf("\n===== %s =====\n", city))
+    
+    # Get WOW max as benchmark
+    wow_benchmark <- data_filtered %>%
+      group_by(Valid_datetime) %>%
+      summarise(
+        wow_max = first(wow_wbgt_max),
+        .groups = 'drop'
+      ) %>%
+      filter(!is.na(wow_max))
+    
+    cat(sprintf("WOW benchmark points: %d\n", nrow(wow_benchmark)))
+    
+    # Run post-processing on official observations
+    obs_column <- "WBGT_obs_10"
+    
+    # Check data availability
+    n_obs <- sum(!is.na(data_filtered[[obs_column]]))
+    cat(sprintf("Official observations available: %d\n", n_obs))
+    
+    if(n_obs < 100) {
+      cat("Skipping: insufficient observations\n")
+      next
+    }
+    
+    # Run three methods
+    cat("\nRunning post-processing methods:\n")
+    
+    # EMOS
+    cat("  EMOS... ")
+    results_emos <- tryCatch({
+      run_emos(data, obs_column, lead_time, training_days)
+    }, error = function(e) {
+      cat(sprintf("Failed: %s\n", e$message))
+      NULL
+    })
+    
+    if(!is.null(results_emos)) {
+      results_emos$city <- city
+      cat(sprintf("Done (%d predictions)\n", nrow(results_emos)))
+    }
+    
+    # QR
+    cat("  Quantile Regression... ")
+    results_qr <- tryCatch({
+      run_quantile_regression(data, obs_column, lead_time, training_days)
+    }, error = function(e) {
+      cat(sprintf("Failed: %s\n", e$message))
+      NULL
+    })
+    
+    if(!is.null(results_qr)) {
+      results_qr$city <- city
+      cat(sprintf("Done (%d predictions)\n", nrow(results_qr)))
+    }
+    
+    # RF
+    cat("  Random Forest... ")
+    results_rf <- tryCatch({
+      suppressWarnings(
+        run_random_forest(data, obs_column, lead_time, training_days)
+      )
+    }, error = function(e) {
+      cat(sprintf("Failed: %s\n", e$message))
+      NULL
+    })
+    
+    if(!is.null(results_rf)) {
+      results_rf$city <- city
+      cat(sprintf("Done (%d predictions)\n", nrow(results_rf)))
+    }
+    
+    # Combine and merge with WOW benchmark
+    city_results <- bind_rows(results_emos, results_qr, results_rf)
+    
+    if(!is.null(city_results)) {
+      # Merge with WOW benchmark
+      city_results <- city_results %>%
+        left_join(wow_benchmark, by = c("time" = "Valid_datetime")) %>%
+        filter(!is.na(wow_max))
+      
+      # Calculate CRPS against WOW max (not observations)
+      # Using vectorized version for efficiency
+      city_results <- city_results %>%
+        mutate(
+          crps_vs_wow = crps.norm.vec(wow_max, pred_mean, pred_sd),
+          error_vs_wow = pred_mean - wow_max,
+          abs_error_vs_wow = abs(error_vs_wow)
+        )
+      
+      all_results[[city]] <- city_results
+    }
+  }
+  
+  # Combine all results
+  final_results <- bind_rows(all_results)
+  
+  # Add raw ensemble for comparison
+  raw_results <- list()
+  
+  for(city in c("Amsterdam", "Rotterdam")) {
+    data <- if(city == "Amsterdam") data_amsterdam else data_rotterdam
+    data_filtered <- data %>% filter(lead_time_hrs == lead_time)
+    
+    raw_data <- data_filtered %>%
+      group_by(Valid_datetime) %>%
+      summarise(
+        ens_mean = mean(WBGT_C, na.rm = TRUE),
+        ens_sd = sd(WBGT_C, na.rm = TRUE),
+        ens_values = list(WBGT_C),
+        wow_max = first(wow_wbgt_max),
+        .groups = 'drop'
+      ) %>%
+      filter(!is.na(wow_max)) %>%
+      rowwise() %>%
+      mutate(
+        crps_vs_wow = crps.ensemble(wow_max, unlist(ens_values)),
+        error_vs_wow = ens_mean - wow_max,
+        abs_error_vs_wow = abs(error_vs_wow)
+      ) %>%
+      ungroup() %>%
+      mutate(
+        city = city,
+        method = "RAW",
+        pred_mean = ens_mean,
+        pred_sd = ens_sd,
+        time = Valid_datetime
+      ) %>%
+      select(time, city, method, pred_mean, pred_sd, wow_max, 
+             crps_vs_wow, error_vs_wow, abs_error_vs_wow)
+    
+    raw_results[[city]] <- raw_data
+  }
+  
+  raw_combined <- bind_rows(raw_results)
+  
+  # Combine with post-processed results
+  all_results_with_raw <- bind_rows(final_results, raw_combined)
+  
+  return(all_results_with_raw)
+}
+
+
+```
+#ROC-AUC Analysis for Extreme Events
+```{r}
+# ROC-AUC analysis for extreme WBGT events
+calculate_roc_auc <- function(results, threshold = 25) {
+  
+  cat(sprintf("\n=== ROC-AUC Analysis (WBGT > %d°C) ===\n", threshold))
+  
+  roc_results <- list()
+  
+  for(city in unique(results$city)) {
+    for(method in unique(results$method)) {
+      
+      subset_data <- results %>%
+        filter(city == !!city, method == !!method) %>%
+        filter(!is.na(wow_max))
+      
+      if(nrow(subset_data) < 50) next
+      
+      # Calculate probabilities for exceeding threshold
+      # Assuming normal distribution for predictions
+      subset_data <- subset_data %>%
+        mutate(
+          obs_exceed = wow_max > threshold,
+          pred_prob = pnorm(threshold, mean = pred_mean, sd = pred_sd, 
+                           lower.tail = FALSE)
+        )
+      
+      # Calculate ROC
+      if(sum(subset_data$obs_exceed) > 5 && sum(!subset_data$obs_exceed) > 5) {
+        roc_obj <- roc(subset_data$obs_exceed, subset_data$pred_prob, 
+                       quiet = TRUE)
+        
+        auc_value <- auc(roc_obj)
+        
+        roc_results[[paste(city, method, sep="_")]] <- data.frame(
+          city = city,
+          method = method,
+          threshold = threshold,
+          auc = as.numeric(auc_value),
+          n_events = sum(subset_data$obs_exceed),
+          n_total = nrow(subset_data),
+          stringsAsFactors = FALSE
+        )
+        
+        # Store ROC curve data for plotting
+        roc_curve <- data.frame(
+          city = city,
+          method = method,
+          sensitivity = roc_obj$sensitivities,
+          specificity = roc_obj$specificities,
+          stringsAsFactors = FALSE
+        )
+        
+        attr(roc_results[[paste(city, method, sep="_")]], "roc_curve") <- roc_curve
+      }
+    }
+  }
+  
+  auc_summary <- bind_rows(roc_results)
+  
+  # Print summary
+  print(auc_summary %>% 
+        arrange(city, desc(auc)) %>%
+        mutate(auc = round(auc, 3)))
+  
+  return(list(
+    auc_summary = auc_summary,
+    roc_data = roc_results
+  ))
+}
+
+# Plot ROC curves
+plot_roc_curves <- function(roc_analysis) {
+  
+  # Extract ROC curve data
+  all_curves <- list()
+  
+  for(name in names(roc_analysis$roc_data)) {
+    curve_data <- attr(roc_analysis$roc_data[[name]], "roc_curve")
+    if(!is.null(curve_data)) {
+      all_curves[[name]] <- curve_data
+    }
+  }
+  
+  roc_curves <- bind_rows(all_curves)
+  
+  # Create plot
+  p <- ggplot(roc_curves, aes(x = 1 - specificity, y = sensitivity, 
+                              color = method)) +
+    geom_line(size = 1.2) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", alpha = 0.5) +
+    facet_wrap(~city) +
+    scale_color_manual(values = c("RAW" = "gray60",
+                                 "EMOS" = "#2ca02c",
+                                 "QR" = "#ff7f0e",
+                                 "RF" = "#1f77b4")) +
+    labs(title = "ROC Curves for Extreme WBGT Events (>25°C)",
+         subtitle = "Comparing against WOW max observations",
+         x = "False Positive Rate (1 - Specificity)",
+         y = "True Positive Rate (Sensitivity)") +
+    theme_minimal() +
+    coord_fixed() +
+    theme(legend.position = "bottom")
+  
+  # Add AUC values to legend
+  auc_text <- roc_analysis$auc_summary %>%
+    group_by(method) %>%
+    summarise(avg_auc = mean(auc), .groups = 'drop') %>%
+    mutate(label = sprintf("%s (AUC: %.3f)", method, avg_auc))
+  
+  print(p)
+  
+  return(p)
+}
+```
+
+#Comprehensive Comparison Analysis
+```{r}
+# Create comprehensive comparison table
+create_wow_comparison_table <- function(results) {
+  
+  comparison <- results %>%
+    group_by(city, method) %>%
+    summarise(
+      n = n(),
+      RMSE_vs_WOW = sqrt(mean(error_vs_wow^2, na.rm = TRUE)),
+      MAE_vs_WOW = mean(abs_error_vs_wow, na.rm = TRUE),
+      Bias_vs_WOW = mean(error_vs_wow, na.rm = TRUE),
+      CRPS_vs_WOW = mean(crps_vs_wow, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    mutate(across(where(is.numeric), ~round(., 3)))
+  
+  # Calculate improvements over raw ensemble
+  improvements <- comparison %>%
+    group_by(city) %>%
+    mutate(
+      raw_crps = CRPS_vs_WOW[method == "RAW"],
+      raw_rmse = RMSE_vs_WOW[method == "RAW"],
+      CRPS_improvement = raw_crps - CRPS_vs_WOW,
+      RMSE_improvement = raw_rmse - RMSE_vs_WOW,
+      CRPS_improvement_pct = (CRPS_improvement / raw_crps) * 100,
+      RMSE_improvement_pct = (RMSE_improvement / raw_rmse) * 100
+    ) %>%
+    ungroup() %>%
+    select(-raw_crps, -raw_rmse)
+  
+  return(improvements)
+}
+
+# Visualization: CRPS comparison against WOW
+plot_crps_vs_wow <- function(comparison_table) {
+  
+  # Prepare data for plotting
+  plot_data <- comparison_table %>%
+    mutate(method = factor(method, levels = c("RAW", "EMOS", "QR", "RF")))
+  
+  # Plot 1: Absolute CRPS values
+  p1 <- ggplot(plot_data, aes(x = method, y = CRPS_vs_WOW, fill = method)) +
+    geom_bar(stat = "identity", width = 0.7) +
+    geom_text(aes(label = sprintf("%.3f", CRPS_vs_WOW)), 
+              vjust = -0.5, size = 3) +
+    facet_wrap(~city) +
+    scale_fill_manual(values = c("RAW" = "gray60",
+                                "EMOS" = "#2ca02c",
+                                "QR" = "#ff7f0e",
+                                "RF" = "#1f77b4")) +
+    labs(title = "CRPS Comparison: All Methods vs WOW Max",
+         subtitle = "Lower values indicate better agreement with crowd-sourced maximum WBGT",
+         x = "Method",
+         y = "Mean CRPS (vs WOW max)") +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  # Plot 2: Improvement percentages
+  p2 <- plot_data %>%
+    filter(method != "RAW") %>%
+    ggplot(aes(x = method, y = CRPS_improvement_pct, fill = method)) +
+    geom_bar(stat = "identity", width = 0.7) +
+    geom_text(aes(label = sprintf("%.1f%%", CRPS_improvement_pct)), 
+              vjust = -0.5, size = 3) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+    facet_wrap(~city) +
+    scale_fill_manual(values = c("EMOS" = "#2ca02c",
+                                "QR" = "#ff7f0e",
+                                "RF" = "#1f77b4")) +
+    labs(title = "CRPS Improvement over Raw Ensemble",
+         subtitle = "When comparing to WOW max observations",
+         x = "Post-Processing Method",
+         y = "Improvement (%)") +
+    theme_minimal() +
+    theme(legend.position = "none")
+  
+  library(gridExtra)
+  grid.arrange(p1, p2, ncol = 1)
+}
+```
+
+#main execution
+```{r}
+# Execute complete analysis
+cat("Starting WBGT Post-Processing Analysis with WOW Benchmark\n")
+cat("=========================================================\n\n")
+
+# 1. Run main analysis
+results_vs_wow <- analyze_vs_wow(
+  data_amsterdam, 
+  data_rotterdam,
+  lead_time = 6,
+  training_days = 30
+)
+
+cat(sprintf("\nTotal results generated: %d\n", nrow(results_vs_wow)))
+
+# 2. Create comparison table
+comparison_wow <- create_wow_comparison_table(results_vs_wow)
+
+cat("\n=== COMPARISON TABLE (vs WOW Max) ===\n")
+print(comparison_wow)
+
+# 3. ROC-AUC Analysis for extreme events
+roc_analysis <- calculate_roc_auc(results_vs_wow, threshold = 25)
+
+# 4. Generate visualizations
+cat("\n=== Generating Plots ===\n")
+
+# CRPS comparison plot
+plot_crps_vs_wow(comparison_wow)
+
+# ROC curves
+plot_roc_curves(roc_analysis)
+
+# 5. Summary statistics
+cat("\n=== SUMMARY STATISTICS ===\n")
+
+# Best performers
+best_methods <- comparison_wow %>%
+  filter(method != "RAW") %>%
+  group_by(city) %>%
+  slice_min(CRPS_vs_WOW, n = 1) %>%
+  select(city, Best_Method = method, CRPS_vs_WOW, CRPS_improvement_pct)
+
+cat("\nBest performing methods (lowest CRPS vs WOW max):\n")
+print(best_methods)
+
+# Overall improvements
+overall_improvements <- comparison_wow %>%
+  filter(method != "RAW") %>%
+  group_by(method) %>%
+  summarise(
+    Avg_CRPS_Improvement = mean(CRPS_improvement_pct, na.rm = TRUE),
+    Avg_RMSE_Improvement = mean(RMSE_improvement_pct, na.rm = TRUE),
+    Avg_AUC = mean(roc_analysis$auc_summary$auc[
+      roc_analysis$auc_summary$method == method], na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  arrange(desc(Avg_CRPS_Improvement))
+
+cat("\nOverall method performance:\n")
+print(overall_improvements)
+
+# 6. Save results
+output_dir <- "wow_comparison_results/"
+if(!dir.exists(output_dir)) dir.create(output_dir)
+
+write.csv(results_vs_wow, 
+         file.path(output_dir, "all_results_vs_wow.csv"), 
+         row.names = FALSE)
+
+write.csv(comparison_wow, 
+         file.path(output_dir, "comparison_table_vs_wow.csv"), 
+         row.names = FALSE)
+
+write.csv(roc_analysis$auc_summary, 
+         file.path(output_dir, "roc_auc_summary.csv"), 
+         row.names = FALSE)
+
+cat(sprintf("\n✓ Results saved to %s\n", output_dir))
+
+# 7. Key insights
+cat("\n=== KEY INSIGHTS ===\n")
+cat("1. All CRPS values are calculated against WOW max observations\n")
+cat("2. This shows how well post-processing captures local extreme conditions\n")
+cat("3. Improvements demonstrate the value of local post-processing\n")
+cat("4. ROC-AUC shows skill in predicting extreme events (WBGT > 25°C)\n")
+
+
+```
+
+#seasonal analysis
+```{r}
+# ============================================
+# SEASONAL ANALYSIS - FIXED VERSION
+# ============================================
+
+# First, we need to add season information to the results
+add_season_to_results <- function(results, data_amsterdam, data_rotterdam) {
+  
+  # Extract season information from original data
+  get_season_mapping <- function(data) {
+    data %>%
+      select(Valid_datetime, season) %>%
+      distinct() %>%
+      rename(time = Valid_datetime)
+  }
+  
+  # Get season mappings from both cities
+  amsterdam_seasons <- get_season_mapping(data_amsterdam)
+  rotterdam_seasons <- get_season_mapping(data_rotterdam)
+  
+  # Combine (they should be the same for same dates)
+  all_seasons <- bind_rows(amsterdam_seasons, rotterdam_seasons) %>%
+    distinct()
+  
+  # Join season information to results
+  results_with_season <- results %>%
+    left_join(all_seasons, by = "time")
+  
+  # Check if join was successful
+  if(sum(is.na(results_with_season$season)) > 0) {
+    cat(sprintf("Warning: %d rows have missing season information\n", 
+                sum(is.na(results_with_season$season))))
+  }
+  
+  return(results_with_season)
+}
+
+# Updated seasonal analysis function
+analyze_seasonal_performance <- function(results, data_amsterdam, data_rotterdam, 
+                                        lead_time = 6) {
+  
+  cat("\n================================================\n")
+  cat("   SEASONAL PERFORMANCE ANALYSIS                \n")
+  cat("================================================\n\n")
+  
+  # Add season information to results
+  results_with_season <- add_season_to_results(results, data_amsterdam, data_rotterdam)
+  
+  # Check available seasons
+  cat("Available seasons in data:\n")
+  print(table(results_with_season$season))
+  cat("\n")
+  
+  # 1. Calculate seasonal CRPS for post-processed methods
+  seasonal_results <- results_with_season %>%
+    filter(!is.na(season)) %>%
+    group_by(city, season, method) %>%
+    summarise(
+      n = n(),
+      mean_crps = mean(crps, na.rm = TRUE),
+      median_crps = median(crps, na.rm = TRUE),
+      sd_crps = sd(crps, na.rm = TRUE),
+      mean_rmse = sqrt(mean((obs - pred_mean)^2, na.rm = TRUE)),
+      mean_mae = mean(abs(obs - pred_mean), na.rm = TRUE),
+      mean_bias = mean(pred_mean - obs, na.rm = TRUE),
+      .groups = 'drop'
+    )
+  
+  # 2. Calculate raw ensemble seasonal CRPS
+  calculate_raw_seasonal_crps <- function(data, city_name, lead_time = 6) {
+    
+    data_filtered <- data %>%
+      filter(lead_time_hrs == lead_time)
+    
+    # Calculate CRPS against WOW max
+    raw_seasonal <- data_filtered %>%
+      group_by(Valid_datetime, season) %>%
+      summarise(
+        wow_max = first(wow_wbgt_max),
+        ens_mean = mean(WBGT_C, na.rm = TRUE),
+        ens_values = list(WBGT_C),
+        .groups = 'drop'
+      ) %>%
+      filter(!is.na(wow_max)) %>%
+      rowwise() %>%
+      mutate(
+        crps_raw = crps.ensemble(wow_max, unlist(ens_values))
+      ) %>%
+      ungroup() %>%
+      group_by(season) %>%
+      summarise(
+        n_raw = n(),
+        mean_crps_raw = mean(crps_raw, na.rm = TRUE),
+        median_crps_raw = median(crps_raw, na.rm = TRUE),
+        sd_crps_raw = sd(crps_raw, na.rm = TRUE),
+        .groups = 'drop'
+      ) %>%
+      mutate(city = city_name)
+    
+    return(raw_seasonal)
+  }
+  
+  # Calculate for both cities
+  raw_amsterdam_seasonal <- calculate_raw_seasonal_crps(data_amsterdam, "Amsterdam", lead_time)
+  raw_rotterdam_seasonal <- calculate_raw_seasonal_crps(data_rotterdam, "Rotterdam", lead_time)
+  raw_seasonal_all <- bind_rows(raw_amsterdam_seasonal, raw_rotterdam_seasonal)
+  
+  # 3. Combine and calculate improvements
+  seasonal_comparison <- seasonal_results %>%
+    left_join(raw_seasonal_all %>% 
+              select(city, season, mean_crps_raw, n_raw),
+              by = c("city", "season")) %>%
+    mutate(
+      crps_improvement = mean_crps_raw - mean_crps,
+      crps_improvement_pct = (crps_improvement / mean_crps_raw) * 100
+    ) %>%
+    arrange(city, season, method)
+  
+  # Add RAW results to the comparison
+  raw_for_table <- raw_seasonal_all %>%
+    mutate(
+      method = "RAW",
+      n = n_raw,
+      mean_crps = mean_crps_raw,
+      crps_improvement = 0,
+      crps_improvement_pct = 0
+    ) %>%
+    select(city, season, method, n, mean_crps, crps_improvement_pct)
+  
+  seasonal_comparison_full <- bind_rows(
+    raw_for_table,
+    seasonal_comparison %>% 
+      select(city, season, method, n, mean_crps, crps_improvement_pct)
+  ) %>%
+    arrange(city, season, method)
+  
+  # 4. Print formatted results
+  cat("\n=== SEASONAL CRPS PERFORMANCE ===\n\n")
+  
+  for(city_name in unique(seasonal_comparison_full$city)) {
+    cat(sprintf("\n%s:\n", city_name))
+    cat(sprintf("%s\n", paste(rep("-", 70), collapse = "")))
+    
+    city_seasonal <- seasonal_comparison_full %>%
+      filter(city == city_name) %>%
+      mutate(
+        mean_crps = round(mean_crps, 3),
+        crps_improvement_pct = round(crps_improvement_pct, 1)
+      )
+    
+    # Create wide format for display
+    city_wide <- city_seasonal %>%
+      select(season, method, mean_crps, crps_improvement_pct) %>%
+      pivot_wider(
+        names_from = method,
+        values_from = c(mean_crps, crps_improvement_pct),
+        names_sep = "_"
+      )
+    
+    print(city_wide, n = Inf)
+  }
+  
+  # 5. Best performing season analysis
+  cat("\n\n=== BEST PERFORMING SEASONS ===\n")
+  
+  best_seasons <- seasonal_comparison %>%
+    group_by(city, method) %>%
+    slice_max(crps_improvement_pct, n = 1) %>%
+    select(city, method, best_season = season, 
+           max_improvement = crps_improvement_pct) %>%
+    mutate(max_improvement = round(max_improvement, 1))
+  
+  print(best_seasons, n = Inf)
+  
+  # 6. Worst performing season analysis
+  cat("\n\n=== MOST CHALLENGING SEASONS ===\n")
+  
+  worst_seasons <- seasonal_comparison %>%
+    group_by(city, method) %>%
+    slice_min(crps_improvement_pct, n = 1) %>%
+    select(city, method, worst_season = season, 
+           min_improvement = crps_improvement_pct) %>%
+    mutate(min_improvement = round(min_improvement, 1))
+  
+  print(worst_seasons, n = Inf)
+  
+  # 7. Overall seasonal patterns
+  cat("\n\n=== AVERAGE IMPROVEMENT BY SEASON (All Methods) ===\n")
+  
+  seasonal_avg <- seasonal_comparison %>%
+    group_by(season) %>%
+    summarise(
+      n_total = sum(n),
+      avg_improvement = mean(crps_improvement_pct, na.rm = TRUE),
+      sd_improvement = sd(crps_improvement_pct, na.rm = TRUE),
+      min_improvement = min(crps_improvement_pct, na.rm = TRUE),
+      max_improvement = max(crps_improvement_pct, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    arrange(desc(avg_improvement)) %>%
+    mutate(across(where(is.numeric) & !n_total, round, 1))
+  
+  print(seasonal_avg)
+  
+  return(list(
+    seasonal_comparison = seasonal_comparison,
+    seasonal_comparison_full = seasonal_comparison_full,
+    seasonal_avg = seasonal_avg,
+    best_seasons = best_seasons
+  ))
+}
+
+# Plotting function
+plot_seasonal_analysis <- function(seasonal_analysis) {
+  
+  library(ggplot2)
+  
+  data_plot <- seasonal_analysis$seasonal_comparison_full %>%
+    filter(method != "RAW")
+  
+  # Plot 1: CRPS by season
+  p1 <- ggplot(data_plot, 
+               aes(x = season, y = mean_crps, fill = method)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    facet_wrap(~city) +
+    scale_fill_manual(values = c("EMOS" = "#2ca02c",
+                                "QR" = "#ff7f0e",
+                                "RF" = "#1f77b4")) +
+    labs(title = "Seasonal CRPS Performance",
+         x = "Season", y = "Mean CRPS") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p1)
+  
+  # Plot 2: Improvement percentages
+  p2 <- ggplot(data_plot,
+               aes(x = season, y = crps_improvement_pct, fill = method)) +
+    geom_bar(stat = "identity", position = "dodge") +
+    geom_text(aes(label = sprintf("%.1f%%", crps_improvement_pct)),
+              position = position_dodge(width = 0.9),
+              vjust = -0.5, size = 3) +
+    facet_wrap(~city) +
+    scale_fill_manual(values = c("EMOS" = "#2ca02c",
+                                "QR" = "#ff7f0e",
+                                "RF" = "#1f77b4")) +
+    labs(title = "Seasonal Improvement over Raw Ensemble",
+         x = "Season", y = "CRPS Improvement (%)") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(p2)
+}
+
+# ============================================
+# EXECUTE ANALYSIS
+# ============================================
+
+# Run the seasonal analysis
+seasonal_analysis <- analyze_seasonal_performance(
+  results = results,  # Your post-processing results
+  data_amsterdam = data_amsterdam,
+  data_rotterdam = data_rotterdam,
+  lead_time = 6
+)
+
+# Create visualizations
+plot_seasonal_analysis(seasonal_analysis)
+
+# Save results
+write.csv(seasonal_analysis$seasonal_comparison_full, 
+          "seasonal_crps_full.csv", row.names = FALSE)
+
+write.csv(seasonal_analysis$seasonal_avg, 
+          "seasonal_summary.csv", row.names = FALSE)
+
+cat("\n✓ Seasonal analysis complete!\n")
+
+```
+
+#PEV framework
+```{r}
+# ============================================
+# PEV ANALYSIS FOR WBGT POST-PROCESSING
+# ============================================
+
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# Main PEV calculation function
+calculate_pev <- function(obs, pred_mean, pred_sd, threshold, cost_loss_ratio) {
+  
+  # Remove NAs
+  valid_idx <- !is.na(obs) & !is.na(pred_mean) & !is.na(pred_sd)
+  obs <- obs[valid_idx]
+  pred_mean <- pred_mean[valid_idx]
+  pred_sd <- pred_sd[valid_idx]
+  n <- length(obs)
+  
+  if(n < 10) return(NA)
+  
+  # Calculate forecast probability of exceeding threshold
+  prob_exceed <- 1 - pnorm(threshold, pred_mean, pred_sd)
+  
+  # Binary decision based on cost-loss ratio
+  take_action <- prob_exceed > cost_loss_ratio
+  
+  # Observed event
+  event_occurred <- obs > threshold
+  
+  # Contingency table elements
+  hits <- sum(take_action & event_occurred)
+  false_alarms <- sum(take_action & !event_occurred)
+  misses <- sum(!take_action & event_occurred)
+  correct_negatives <- sum(!take_action & !event_occurred)
+  
+  # Observed relative frequency
+  orf <- sum(event_occurred) / n
+  
+  # Handle edge cases
+  if(orf == 0 || orf == 1) return(0)
+  
+  # Calculate expenses
+  expense_forecast <- (hits + false_alarms) * cost_loss_ratio + misses * 1
+  
+  # Climatology strategy expense
+  if(cost_loss_ratio < orf) {
+    # Always protect
+    expense_clim <- n * cost_loss_ratio
+  } else {
+    # Never protect
+    expense_clim <- sum(event_occurred) * 1
+  }
+  
+  # Perfect forecast expense
+  expense_perfect <- sum(event_occurred) * cost_loss_ratio
+  
+  # PEV calculation
+  if(abs(expense_clim - expense_perfect) < 1e-10) {
+    pev <- 0
+  } else {
+    pev <- (expense_clim - expense_forecast) / (expense_clim - expense_perfect)
+  }
+  
+  return(pev)
+}
+
+# Calculate PEV for raw ensemble
+calculate_pev_raw <- function(data, threshold, cost_loss_ratio, lead_time = 6) {
+  
+  # Filter data
+  data_filtered <- data %>%
+    filter(lead_time_hrs == lead_time)
+  
+  # Aggregate ensemble
+  data_agg <- data_filtered %>%
+    group_by(Valid_datetime) %>%
+    summarise(
+      wow_max = first(wow_wbgt_max),
+      ens_mean = mean(WBGT_C, na.rm = TRUE),
+      ens_sd = sd(WBGT_C, na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    filter(!is.na(wow_max))
+  
+  # Calculate PEV
+  pev <- calculate_pev(
+    obs = data_agg$wow_max,
+    pred_mean = data_agg$ens_mean,
+    pred_sd = data_agg$ens_sd,
+    threshold = threshold,
+    cost_loss_ratio = cost_loss_ratio
+  )
+  
+  return(pev)
+}
+
+# Calculate PEV curves for all methods
+calculate_pev_curves <- function(results, data_amsterdam, data_rotterdam,
+                                thresholds = c(20, 25, 30),
+                                cl_ratios = seq(0.01, 0.5, by = 0.02)) {
+  
+  all_pev_results <- list()
+  
+  for(city in unique(results$city)) {
+    for(method in unique(results$method)) {
+      for(threshold in thresholds) {
+        
+        # Filter results
+        method_data <- results %>%
+          filter(city == !!city, method == !!method)
+        
+        if(nrow(method_data) < 100) next
+        
+        # Check if threshold is reasonable
+        if(threshold > quantile(method_data$wow_max, 0.99, na.rm = TRUE)) next
+        
+        # Calculate PEV for each cost-loss ratio
+        pev_values <- sapply(cl_ratios, function(cl) {
+          calculate_pev(
+            obs = method_data$wow_max,
+            pred_mean = method_data$pred_mean,
+            pred_sd = method_data$pred_sd,
+            threshold = threshold,
+            cost_loss_ratio = cl
+          )
+        })
+        
+        # Store results
+        all_pev_results[[length(all_pev_results) + 1]] <- data.frame(
+          city = city,
+          method = method,
+          threshold = threshold,
+          cost_loss_ratio = cl_ratios,
+          pev = pev_values,
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+    
+    # Add raw ensemble results
+    raw_data <- if(city == "Amsterdam") data_amsterdam else data_rotterdam
+    
+    for(threshold in thresholds) {
+      pev_values_raw <- sapply(cl_ratios, function(cl) {
+        calculate_pev_raw(raw_data, threshold, cl, lead_time = 6)
+      })
+      
+      all_pev_results[[length(all_pev_results) + 1]] <- data.frame(
+        city = city,
+        method = "RAW",
+        threshold = threshold,
+        cost_loss_ratio = cl_ratios,
+        pev = pev_values_raw,
+        stringsAsFactors = FALSE
+      )
+    }
+  }
+  
+  return(bind_rows(all_pev_results))
+}
+
+# Calculate integrated PEV (area under curve)
+calculate_integrated_pev <- function(pev_curves) {
+  
+  integrated <- pev_curves %>%
+    group_by(city, method, threshold) %>%
+    summarise(
+      integrated_pev = {
+        valid_idx <- !is.na(pev) & pev > -0.5  # Remove extreme negative values
+        if(sum(valid_idx) < 2) {
+          NA
+        } else {
+          x <- cost_loss_ratio[valid_idx]
+          y <- pev[valid_idx]
+          # Trapezoidal integration
+          sum(diff(x) * (y[-1] + y[-length(y)]) / 2)
+        }
+      },
+      max_pev = max(pev[!is.na(pev)], na.rm = TRUE),
+      optimal_cl = cost_loss_ratio[which.max(pev)],
+      positive_range = sum(pev > 0, na.rm = TRUE) / length(pev),
+      .groups = 'drop'
+    )
+  
+  return(integrated)
+}
+
+# Plot PEV curves
+plot_pev_curves <- function(pev_curves, selected_threshold = 25) {
+  
+  # Filter data
+  plot_data <- pev_curves %>%
+    filter(threshold == selected_threshold,
+           !is.na(pev),
+           pev > -1)  # Remove extreme negative values for visualization
+  
+  # Define colors
+  method_colors <- c("RAW" = "gray60",
+                    "EMOS" = "#2ca02c",
+                    "QR" = "#ff7f0e",
+                    "RF" = "#1f77b4")
+  
+  # Create plot
+  p <- ggplot(plot_data, aes(x = cost_loss_ratio, y = pev, 
+                             color = method, linetype = method)) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.3) +
+    geom_line(size = 1.2) +
+    facet_wrap(~city, ncol = 2) +
+    scale_color_manual(values = method_colors) +
+    scale_y_continuous(limits = c(-0.2, 1)) +
+    labs(
+      title = sprintf("Potential Economic Value Curves (Threshold = %d°C)", selected_threshold),
+      subtitle = "Higher values indicate better economic value for decision-making",
+      x = "Cost/Loss Ratio",
+      y = "Potential Economic Value",
+      color = "Method",
+      linetype = "Method"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          panel.grid.minor = element_blank())
+  
+  return(p)
+}
+
+# Create comparison table
+create_pev_comparison_table <- function(integrated_pev) {
+  
+  # Reshape for comparison
+  comparison <- integrated_pev %>%
+    select(city, method, threshold, integrated_pev, max_pev, optimal_cl) %>%
+    arrange(city, threshold, desc(integrated_pev)) %>%
+    mutate(
+      integrated_pev = round(integrated_pev, 3),
+      max_pev = round(max_pev, 3),
+      optimal_cl = round(optimal_cl, 3)
+    )
+  
+  # Calculate improvement over RAW
+  improvement <- comparison %>%
+    group_by(city, threshold) %>%
+    mutate(
+      raw_integrated = integrated_pev[method == "RAW"],
+      improvement_pct = round((integrated_pev - raw_integrated) / abs(raw_integrated) * 100, 1)
+    ) %>%
+    ungroup() %>%
+    select(-raw_integrated)
+  
+  return(improvement)
+}
+
+# Generate LaTeX table
+create_pev_latex_table <- function(pev_comparison) {
+  
+  cat("\n=== LATEX TABLE FOR PEV RESULTS ===\n")
+  cat("\\begin{table}[h!]\n")
+  cat("\\centering\n")
+  cat("\\caption{Integrated PEV and maximum PEV values for different thresholds}\n")
+  cat("\\label{tab:pev_analysis}\n")
+  cat("\\begin{tabular}{llccccc}\n")
+  cat("\\hline\n")
+  cat("City & Method & Threshold & Integrated PEV & Max PEV & Optimal C/L & Improvement (\\%) \\\\\n")
+  cat("\\hline\n")
+  
+  for(city_name in unique(pev_comparison$city)) {
+    city_data <- pev_comparison %>% filter(city == city_name)
+    
+    first_row <- TRUE
+    for(i in 1:nrow(city_data)) {
+      if(first_row) {
+        cat(sprintf("\\multirow{%d}{*}{%s}\n", nrow(city_data), city_name))
+        first_row <- FALSE
+      }
+      
+      improvement_str <- ifelse(city_data$method[i] == "RAW", 
+                               "--", 
+                               sprintf("%.1f", city_data$improvement_pct[i]))
+      
+      cat(sprintf(" & %s & %d & %.3f & %.3f & %.3f & %s \\\\\n",
+                 city_data$method[i],
+                 city_data$threshold[i],
+                 city_data$integrated_pev[i],
+                 city_data$max_pev[i],
+                 city_data$optimal_cl[i],
+                 improvement_str))
+    }
+    
+    if(city_name == unique(pev_comparison$city)[1]) {
+      cat("\\hline\n")
+    }
+  }
+  
+  cat("\\hline\n")
+  cat("\\end{tabular}\n")
+  cat("\\end{table}\n")
+}
+
+# ============================================
+# MAIN PEV ANALYSIS EXECUTION
+# ============================================
+
+run_pev_analysis <- function(results, data_amsterdam, data_rotterdam) {
+  
+  cat("\n========================================\n")
+  cat("   POTENTIAL ECONOMIC VALUE ANALYSIS    \n")
+  cat("========================================\n\n")
+  
+  # Define thresholds based on data range
+  # Check actual data range
+  wow_range <- range(results$wow_max, na.rm = TRUE)
+  cat(sprintf("WOW max range: %.1f to %.1f°C\n", wow_range[1], wow_range[2]))
+  
+  # Set meaningful thresholds
+  thresholds <- c(20, 25)  # Focus on heat stress thresholds
+  
+  # Calculate PEV curves
+  cat("\nCalculating PEV curves...\n")
+  pev_curves <- calculate_pev_curves(
+    results = results,
+    data_amsterdam = data_amsterdam,
+    data_rotterdam = data_rotterdam,
+    thresholds = thresholds,
+    cl_ratios = seq(0.01, 0.5, by = 0.02)
+  )
+  
+  # Calculate integrated PEV
+  cat("Calculating integrated PEV...\n")
+  integrated_pev <- calculate_integrated_pev(pev_curves)
+  
+  # Create comparison table
+  pev_comparison <- create_pev_comparison_table(integrated_pev)
+  
+  # Print summary
+  cat("\n=== INTEGRATED PEV SUMMARY ===\n")
+  print(pev_comparison)
+  
+  # Create plots
+  cat("\nGenerating PEV curves...\n")
+  
+  # Plot for each threshold
+  plots <- list()
+  for(thresh in thresholds) {
+    plots[[as.character(thresh)]] <- plot_pev_curves(pev_curves, thresh)
+    print(plots[[as.character(thresh)]])
+  }
+  
+  # Generate LaTeX table
+  create_pev_latex_table(pev_comparison %>% filter(threshold == 25))
+  
+  # Save results
+  write.csv(pev_curves, "pev_curves_full.csv", row.names = FALSE)
+  write.csv(pev_comparison, "pev_comparison_table.csv", row.names = FALSE)
+  
+  cat("\n✓ PEV analysis complete!\n")
+  
+  return(list(
+    curves = pev_curves,
+    integrated = integrated_pev,
+    comparison = pev_comparison,
+    plots = plots
+  ))
+}
+
+# Execute PEV analysis
+pev_results <- run_pev_analysis(results_vs_wow, data_amsterdam, data_rotterdam)
+
+# Additional analysis: Best method by cost-loss ratio range
+analyze_pev_by_cl_range <- function(pev_curves) {
+  
+  # Define C/L ranges relevant for different users
+  cl_ranges <- list(
+    "Risk-averse (0.01-0.10)" = c(0.01, 0.10),
+    "Moderate (0.10-0.25)" = c(0.10, 0.25),
+    "Risk-tolerant (0.25-0.50)" = c(0.25, 0.50)
+  )
+  
+  range_analysis <- list()
+  
+  for(range_name in names(cl_ranges)) {
+    range_limits <- cl_ranges[[range_name]]
+    
+    range_pev <- pev_curves %>%
+      filter(cost_loss_ratio >= range_limits[1],
+             cost_loss_ratio <= range_limits[2]) %>%
+      group_by(city, method, threshold) %>%
+      summarise(
+        mean_pev = mean(pev, na.rm = TRUE),
+        .groups = 'drop'
+      ) %>%
+      group_by(city, threshold) %>%
+      slice_max(mean_pev, n = 1) %>%
+      mutate(cl_range = range_name)
+    
+    range_analysis[[range_name]] <- range_pev
+  }
+  
+  final_analysis <- bind_rows(range_analysis)
+  
+  cat("\n=== BEST METHOD BY COST-LOSS RATIO RANGE ===\n")
+  print(final_analysis)
+  
+  return(final_analysis)
+}
+
+# Run additional analysis
+cl_range_analysis <- analyze_pev_by_cl_range(pev_results$curves)
+```
+

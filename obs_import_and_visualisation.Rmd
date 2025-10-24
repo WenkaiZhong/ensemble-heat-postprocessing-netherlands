@@ -119,7 +119,7 @@ import_knmi_data <- function(date_str,
   return(data)
 }
 
-data <- import_knmi_data("2021-02-02")
+data <- import_knmi_data("2021-07-31")
 data
 
 location_table <- unique(data[, c("LOCATION", "NAME", "LATITUDE", "LONGITUDE","ALTITUDE")])
