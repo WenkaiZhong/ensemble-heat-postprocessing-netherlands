@@ -1,0 +1,59 @@
+# WOW Netherlands Weather Data - Metadata
+
+**Source:** Met Office WOW (Weather Observations Website)  
+**Coverage:** Netherlands, 2021-2023  
+**Format:** CSV (2021), JSON (2022-2023)
+
+---
+
+## Variables
+
+| Variable | Type | Unit | Description |
+
+| ExternalSiteId | string | - | Unique station ID |
+| ReportStartDateTime | datetime | UTC | Observation start time |
+| ReportEndDateTime | datetime | UTC | Observation end time |
+| CreatedDateTime | datetime | UTC | Record creation time |
+**** Time variables starting with local are in local time.
+| Latitude | numeric | degrees | Station latitude |
+| Longitude | numeric | degrees | Station longitude |
+| Height | numeric | m | Station elevation |
+| DryBulbTemperature_Celsius | numeric | °C | Air temperature |
+| DewPointTemperature_Celsius | numeric | °C | Dew point temperature |
+| RelativeHumidity | numeric | % | Relative humidity |
+| AirPressure_Hectopascal | numeric | hPa | Station pressure |
+| MeanSeaLevelPressure_Hectopascal | numeric | hPa | Sea level pressure |
+| RainfallAmount_Millimetre | numeric | mm | Rainfall amount |
+| RainfallRate_MillimetrePerHour | numeric | mm/h | Rainfall rate |
+| WindDirection | numeric | degrees | Wind direction |
+| WindSpeed_MetrePerSecond | numeric | m/s | Wind speed |
+| WindGust_MetrePerSecond | numeric | m/s | Wind gust |
+| IsOfficial | logical | - | Official station flag |
+| IsPublic | logical | - | Public visibility |
+| IsFlagged | logical | - | Quality flag |
+
+---
+
+## Important Notes !!!!!
+
+*Different stations observe on different dates - Not all stations have continuous records
+
+*Limited WetBulbTemperature availability - Only a small number of stations record wet bulb temperature
+
+*2021 vs 2022-2023 differences:
+File format: 2021 uses CSV (semicolon-separated), 2022-2023 uses JSON
+2021 IsOfficial stored as string "True"/"False" → Converted to logical
+2021 missing ExternalSiteId → Generated as WOW_{lat}_{lon} from coordinates
+2021 data has different varaible name comapre to 22 and 23 data like ReportEndDateTime and LocalReportEndDateTime
+
+
+*Official stations filtered out (IsOfficial == TRUE removed)
+
+---
+
+
+
+
+
+
+

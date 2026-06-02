@@ -1,12 +1,8 @@
----
-title: "research_functions"
-author: "Wenkai_Zhong"
-date: "2025-08-25"
-output: html_document
----
 #load packages
 ```{r}
+install.packages("purrr")
 library(purrr)  # for map functions
+install.packages("tidyr")
 library(tidyr)  # for nest and pivot_wider
 ```
 
@@ -15,6 +11,14 @@ library(tidyr)  # for nest and pivot_wider
 ```{r}
 # ============================================
 #     EMOS POST-PROCESSING - FIXED VERSION
+# ============================================
+
+install.packages("dplyr")
+library(dplyr)
+install.packages("tidyr")
+library(tidyr)
+install.packages("compiler")
+library(compiler)SSING - FIXED VERSION
 # ============================================
 
 library(dplyr)

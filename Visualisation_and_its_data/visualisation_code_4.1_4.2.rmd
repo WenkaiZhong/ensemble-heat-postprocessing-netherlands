@@ -1,0 +1,226 @@
+---
+title: "Visualisation 4.1, 4.2 & 4.3 — CRPS Comparison (KNMI avg vs WOW max)"
+author: "Wenkai_Zhong"
+output: html_document
+---
+
+This file reproduces the violin/box CRPS plots from `main_analysis.Rmd` for
+three variables, all at lead time = 24 hrs, comparing two observation sources:
+
+- **4.1** Temperature CRPS by city × season (KNMI 10-min avg vs WOW hourly max)
+- **4.2** WBGT CRPS  by city × season (same two observation sources)
+- **4.3** Humidity CRPS by city × season (same two observation sources)
+
+# Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(here)
+library(isodistrreg)   # crps()
+```
+
+# Load processed data
+
+The two RDS files contain forecast ensemble + KNMI obs + WOW obs already
+merged (one row per ensemble member × valid time × lead time).
+
+```{r load-data}
+data_path <- here("Visualisation_and_its_data", "Visualisation_data")
+
+data_amsterdam <- readRDS(file.path(data_path, "data_amsterdam_processed.rds"))
+data_rotterdam <- readRDS(file.path(data_path, "data_rotterdam_processed.rds"))
+
+cat(sprintf("Amsterdam: %d rows, %d cols\n",
+            nrow(data_amsterdam), ncol(data_amsterdam)))
+cat(sprintf("Rotterdam: %d rows, %d cols\n",
+            nrow(data_rotterdam), ncol(data_rotterdam)))
+```
+
+# Compute CRPS for all three variables (shared)
+
+We loop over each unique valid time at a fixed lead time (24 h), build the
+ensemble vectors across members for Temperature / WBGT / Humidity, then
+compute CRPS against:
+
+- **KNMI (avg)** — `T_DRYB_10` / `WBGT_obs_10` / `U_10`, official 10-min averages
+- **WOW (max)** — `wow_temp_max` / `wow_wbgt_max` / `wow_humidity_max`,
+  hourly maxima from crowd-sourced stations
+
+Forecast ensemble columns: `Temperature_C`, `WBGT_C`, `Relative_humidity_pct`.
+
+```{r compute-crps}
+compute_crps_one_city <- function(data, city_name, lead_time = 24) {
+
+  data_lt <- data %>% filter(lead_time_hrs == lead_time)
+  unique_times <- unique(data_lt$Valid_datetime)
+
+  out <- vector("list", length(unique_times))
+  k <- 0
+
+  for (vtime in unique_times) {
+    time_data <- data_lt %>% filter(Valid_datetime == vtime)
+    if (nrow(time_data) < 10) next   # need enough ensemble members
+
+    # Ensemble matrices (members as columns)
+    ens_temp_df <- data.frame(t(time_data$Temperature_C))
+    colnames(ens_temp_df) <- paste0("M", seq_len(ncol(ens_temp_df)))
+
+    ens_wbgt_df <- data.frame(t(time_data$WBGT_C))
+    colnames(ens_wbgt_df) <- paste0("M", seq_len(ncol(ens_wbgt_df)))
+
+    ens_humid_df <- data.frame(t(time_data$Relative_humidity_pct))
+    colnames(ens_humid_df) <- paste0("M", seq_len(ncol(ens_humid_df)))
+
+    # Observation values (one per valid time)
+    obs_temp_knmi     <- time_data$T_DRYB_10[!is.na(time_data$T_DRYB_10)][1]
+    obs_wbgt_knmi     <- time_data$WBGT_obs_10[!is.na(time_data$WBGT_obs_10)][1]
+    obs_humid_knmi    <- time_data$U_10[!is.na(time_data$U_10)][1]
+    obs_temp_wow_max  <- time_data$wow_temp_max[!is.na(time_data$wow_temp_max)][1]
+    obs_wbgt_wow_max  <- time_data$wow_wbgt_max[!is.na(time_data$wow_wbgt_max)][1]
+    obs_humid_wow_max <- time_data$wow_humidity_max[!is.na(time_data$wow_humidity_max)][1]
+
+    has_any <- !is.na(obs_temp_knmi) || !is.na(obs_wbgt_knmi) || !is.na(obs_humid_knmi) ||
+               !is.na(obs_temp_wow_max) || !is.na(obs_wbgt_wow_max) || !is.na(obs_humid_wow_max)
+    if (!has_any) next
+
+    safe_crps <- function(pred_df, y) {
+      if (is.na(y)) return(NA_real_)
+      as.numeric(isodistrreg::crps(predictions = pred_df, y = y))
+    }
+
+    k <- k + 1
+    out[[k]] <- data.frame(
+      city               = city_name,
+      time               = vtime,
+      season             = time_data$season[1],
+      crps_temp_knmi     = safe_crps(ens_temp_df,  obs_temp_knmi),
+      crps_temp_wow_max  = safe_crps(ens_temp_df,  obs_temp_wow_max),
+      crps_wbgt_knmi     = safe_crps(ens_wbgt_df,  obs_wbgt_knmi),
+      crps_wbgt_wow_max  = safe_crps(ens_wbgt_df,  obs_wbgt_wow_max),
+      crps_humid_knmi    = safe_crps(ens_humid_df, obs_humid_knmi),
+      crps_humid_wow_max = safe_crps(ens_humid_df, obs_humid_wow_max),
+      stringsAsFactors   = FALSE
+    )
+  }
+
+  bind_rows(out[seq_len(k)])
+}
+
+crps_amsterdam <- compute_crps_one_city(data_amsterdam, "Amsterdam", lead_time = 24)
+crps_rotterdam <- compute_crps_one_city(data_rotterdam, "Rotterdam", lead_time = 24)
+
+combined_crps <- bind_rows(crps_amsterdam, crps_rotterdam)
+
+cat(sprintf("Computed CRPS for %d valid times across both cities\n",
+            nrow(combined_crps)))
+```
+
+# 4.1 Temperature CRPS by city × season
+
+```{r plot-4.1-temperature, fig.width=10, fig.height=4.5}
+plot_temp <- combined_crps %>%
+  select(city, season, starts_with("crps_temp")) %>%
+  pivot_longer(cols = starts_with("crps_temp"),
+               names_to = "Type",
+               values_to = "CRPS") %>%
+  filter(!is.na(CRPS)) %>%
+  mutate(Type = case_when(
+    Type == "crps_temp_knmi"    ~ "KNMI (avg)",
+    Type == "crps_temp_wow_max" ~ "WOW (max)",
+    TRUE                         ~ Type
+  )) %>%
+  ggplot(aes(x = season, y = CRPS, fill = Type)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              alpha = 0.6, trim = FALSE) +
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.2, alpha = 0.8,
+               outlier.size = 0.5) +
+  facet_wrap(~ city, ncol = 2) +
+  scale_fill_manual(values = c("KNMI (avg)" = "#2166AC",
+                               "WOW (max)"  = "#92C5DE")) +
+  coord_cartesian(ylim = c(0, 6)) +
+  theme_minimal(base_size = 11) +
+  labs(title = "Temperature CRPS (Lead time = 24 hrs)",
+       x     = "Season",
+       y     = "CRPS (°C)",
+       fill  = "Data Source") +
+  theme(legend.position  = "right",
+        legend.direction = "vertical",
+        strip.text       = element_text(face = "bold", size = 12))
+
+plot_temp
+```
+
+# 4.2 WBGT CRPS by city × season
+
+```{r plot-4.2-wbgt, fig.width=10, fig.height=4.5}
+plot_wbgt <- combined_crps %>%
+  select(city, season, starts_with("crps_wbgt")) %>%
+  pivot_longer(cols = starts_with("crps_wbgt"),
+               names_to = "Type",
+               values_to = "CRPS") %>%
+  filter(!is.na(CRPS)) %>%
+  mutate(Type = case_when(
+    Type == "crps_wbgt_knmi"    ~ "KNMI (avg)",
+    Type == "crps_wbgt_wow_max" ~ "WOW (max)",
+    TRUE                         ~ Type
+  )) %>%
+  ggplot(aes(x = season, y = CRPS, fill = Type)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              alpha = 0.6, trim = FALSE) +
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.2, alpha = 0.8,
+               outlier.size = 0.5) +
+  facet_wrap(~ city, ncol = 2) +
+  scale_fill_manual(values = c("KNMI (avg)" = "#D6604D",
+                               "WOW (max)"  = "#FDDBC7")) +
+  coord_cartesian(ylim = c(0, 12.5)) +
+  theme_minimal(base_size = 11) +
+  labs(title = "WBGT CRPS (Lead time = 24 hrs)",
+       x     = "Season",
+       y     = "CRPS (°C)",
+       fill  = "Data Source") +
+  theme(legend.position  = "right",
+        legend.direction = "vertical",
+        strip.text       = element_text(face = "bold", size = 12))
+
+plot_wbgt
+```
+
+# 4.3 Humidity CRPS by city × season
+
+```{r plot-4.3-humidity, fig.width=10, fig.height=4.5}
+plot_humid <- combined_crps %>%
+  select(city, season, starts_with("crps_humid")) %>%
+  pivot_longer(cols = starts_with("crps_humid"),
+               names_to = "Type",
+               values_to = "CRPS") %>%
+  filter(!is.na(CRPS)) %>%
+  mutate(Type = case_when(
+    Type == "crps_humid_knmi"    ~ "KNMI (avg)",
+    Type == "crps_humid_wow_max" ~ "WOW (max)",
+    TRUE                          ~ Type
+  )) %>%
+  ggplot(aes(x = season, y = CRPS, fill = Type)) +
+  geom_violin(position = position_dodge(width = 0.9),
+              alpha = 0.6, trim = FALSE) +
+  geom_boxplot(position = position_dodge(width = 0.9),
+               width = 0.2, alpha = 0.8,
+               outlier.size = 0.5) +
+  facet_wrap(~ city, ncol = 2) +
+  scale_fill_manual(values = c("KNMI (avg)" = "#1B7837",
+                               "WOW (max)"  = "#A6DBA0")) +
+  coord_cartesian(ylim = c(0, 40)) +
+  theme_minimal(base_size = 11) +
+  labs(title = "Humidity CRPS (Lead time = 24 hrs)",
+       x     = "Season",
+       y     = "CRPS (%)",
+       fill  = "Data Source") +
+  theme(legend.position  = "right",
+        legend.direction = "vertical",
+        strip.text       = element_text(face = "bold", size = 12))
+
+plot_humid
+```

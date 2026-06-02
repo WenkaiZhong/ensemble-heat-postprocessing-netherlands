@@ -1,0 +1,16 @@
+{
+  "actions": [
+    {
+      "text": "$(repo-pull) Pull",
+      "command": "git pull",
+      "tooltip": "Pull changes from the remote repository",
+      "color": "#b0eb93"
+    },
+    {
+      "text": "$(repo-push) Push",
+      "command": "git add .; git commit; git push",
+      "tooltip": "Add, commit, and push changes to the remote repository",
+      "color": "#ffc384"
+    }
+  ]
+}

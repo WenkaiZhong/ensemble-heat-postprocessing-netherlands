@@ -1,34 +1,45 @@
----
-title: "main"
-author: "Wenkai_Zhong"
-date: "2025-08-06"
-output: html_document
----
+
 ```{r}
+#install.packages("here")
 library(here)
+#install.packages("ggplot2")
 library(ggplot2)
+#install.packages("reshape2")
 library(reshape2)
+#install.packages("viridis")
 library(viridis)
+#install.packages("dplyr")
 library(dplyr)
+#install.packages("purrr")
 library(purrr)
+#install.packages("tidyr")
 library(tidyr)
+#install.packages("compiler")
 library(compiler)
+#install.packages("quantreg")
 library(quantreg)
+#install.packages("randomForest")
 library(randomForest)
+#install.packages("lubridate")
 library(lubridate) 
-library(sf)
+#install.packages("rnaturalearth")
 library(rnaturalearth)
+#install.packages("rnaturalearthdata")
 library(rnaturalearthdata)
+#install.packages("pROC")
 library(pROC)
-library(compiler)
+#install.packages("isodistrreg")
+library(isodistrreg)
+#install.packages("kableExtra")
+library(kableExtra)
 ```
 
 #load_data for further research
 ```{r}
 # Set file path
-data_path <- here("data_clean")
-
-# Get all RDS files in the directory
+# data_path <- here("data_clean")
+# 
+# # Get all RDS files in the directory
 # files <- list.files(data_path, pattern = "\\.rds$", full.names = TRUE)
 # print(paste("Found", length(files), "files"))
 # 
@@ -282,8 +293,10 @@ data_path <- here("data_clean")
 # # Apply the corrected processing
 # data_amsterdam <- process_knmi_observations(data_amsterdam)
 # data_rotterdam <- process_knmi_observations(data_rotterdam)
-# #
-# # # === SAVE PROCESSED DATA ===
+# 
+# 
+# 
+# # === SAVE PROCESSED DATA ===
 # #
 # # Save Amsterdam data
 # amsterdam_file <- file.path(data_path, "data_amsterdam_processed.rds")
@@ -1423,11 +1436,11 @@ amsterdam_maps <- create_city_analysis_maps(
   time_point = time_point
 )
 
-# 显示地图
+# shows map
 print(amsterdam_maps$temp_map)
 print(amsterdam_maps$wbgt_map)
 print(amsterdam_maps$heatmap)
-print(amsterdam_maps$timeseries)
+#print(amsterdam_maps$timeseries)
 ```
 
 
@@ -1440,7 +1453,7 @@ validation_start <- "2021-07-01"  # Start of validation period
 test_start <- "2021-08-01"  # Start of test period
 
 # Split data function
-split_data <- function(data, lead_time = 6) {
+split_data <- function(data, lead_time = 24) {
   data_filtered <- data %>%
     filter(lead_time_hrs == lead_time) %>%
     arrange(Valid_datetime)
@@ -1545,7 +1558,7 @@ plot_crps_distributions <- function(results) {
 ```{r}
 # Quantile Regression
 run_quantile_regression <- function(data, obs_column = "WBGT_obs_10", 
-                                   lead_time = 6, training_days = 30,
+                                   lead_time = 24, training_days = 30,
                                    quantiles = seq(0.05, 0.95, 0.05)) {
   
   data <- data %>% filter(lead_time_hrs == lead_time)
@@ -1613,7 +1626,7 @@ run_quantile_regression <- function(data, obs_column = "WBGT_obs_10",
 #Method 2: Random Forest (RF)
 ```{r}
 run_random_forest <- function(data, obs_column = "WBGT_obs_10", 
-                             lead_time = 6, training_days = 30,
+                             lead_time = 24, training_days = 30,
                              n_trees = 100) {
   
   data <- data %>% filter(lead_time_hrs == lead_time)
@@ -1697,7 +1710,7 @@ run_random_forest <- function(data, obs_column = "WBGT_obs_10",
 #Method 3: EMOS (Ensemble Model Output Statistics)
 ```{r}
 run_emos <- function(data, obs_column = "WBGT_obs_10", 
-                    lead_time = 6, training_days = 30) {
+                    lead_time = 24, training_days = 30) {
   
   data <- data %>% filter(lead_time_hrs == lead_time)
   
@@ -1784,7 +1797,7 @@ run_emos <- function(data, obs_column = "WBGT_obs_10",
 ```{r}
 # Main analysis comparing all methods to WOW max
 analyze_vs_wow <- function(data_amsterdam, data_rotterdam, 
-                          lead_time = 6, training_days = 30) {
+                          lead_time = 24, training_days = 30) {
   
   cat("\n================================================\n")
   cat("   WBGT Analysis: Post-Processing vs WOW Max    \n")
@@ -1811,7 +1824,9 @@ analyze_vs_wow <- function(data_amsterdam, data_rotterdam,
     cat(sprintf("WOW benchmark points: %d\n", nrow(wow_benchmark)))
     
     # Run post-processing on official observations
-    obs_column <- "WBGT_obs_10"
+    #obs_column <- "WBGT_obs_10"
+    # Run post-processing on WOW observations
+    obs_column <- "wow_wbgt_max"
     
     # Check data availability
     n_obs <- sum(!is.na(data_filtered[[obs_column]]))
@@ -2149,7 +2164,7 @@ cat("=========================================================\n\n")
 results_vs_wow <- analyze_vs_wow(
   data_amsterdam, 
   data_rotterdam,
-  lead_time = 6,
+  lead_time = 24,
   training_days = 30
 )
 
@@ -2268,9 +2283,8 @@ add_season_to_results <- function(results, data_amsterdam, data_rotterdam) {
   return(results_with_season)
 }
 
-# Updated seasonal analysis function
 analyze_seasonal_performance <- function(results, data_amsterdam, data_rotterdam, 
-                                        lead_time = 6) {
+                                        lead_time = 24) {
   
   cat("\n================================================\n")
   cat("   SEASONAL PERFORMANCE ANALYSIS                \n")
@@ -2290,12 +2304,12 @@ analyze_seasonal_performance <- function(results, data_amsterdam, data_rotterdam
     group_by(city, season, method) %>%
     summarise(
       n = n(),
-      mean_crps = mean(crps, na.rm = TRUE),
-      median_crps = median(crps, na.rm = TRUE),
-      sd_crps = sd(crps, na.rm = TRUE),
-      mean_rmse = sqrt(mean((obs - pred_mean)^2, na.rm = TRUE)),
-      mean_mae = mean(abs(obs - pred_mean), na.rm = TRUE),
-      mean_bias = mean(pred_mean - obs, na.rm = TRUE),
+      mean_crps = mean(crps_vs_wow, na.rm = TRUE),
+      median_crps = median(crps_vs_wow, na.rm = TRUE),
+      sd_crps = sd(crps_vs_wow, na.rm = TRUE),
+      mean_rmse = sqrt(mean(error_vs_wow^2, na.rm = TRUE)),
+      mean_mae = mean(abs_error_vs_wow, na.rm = TRUE),
+      mean_bias = mean(error_vs_wow, na.rm = TRUE),
       .groups = 'drop'
     )
   
@@ -2305,7 +2319,6 @@ analyze_seasonal_performance <- function(results, data_amsterdam, data_rotterdam
     data_filtered <- data %>%
       filter(lead_time_hrs == lead_time)
     
-    # Calculate CRPS against WOW max
     raw_seasonal <- data_filtered %>%
       group_by(Valid_datetime, season) %>%
       summarise(
@@ -2349,25 +2362,27 @@ analyze_seasonal_performance <- function(results, data_amsterdam, data_rotterdam
     ) %>%
     arrange(city, season, method)
   
-  # Add RAW results to the comparison
+  # 4. Create seasonal_comparison_full by adding RAW results
   raw_for_table <- raw_seasonal_all %>%
     mutate(
       method = "RAW",
       n = n_raw,
       mean_crps = mean_crps_raw,
+      median_crps = median_crps_raw,
+      sd_crps = sd_crps_raw,
       crps_improvement = 0,
       crps_improvement_pct = 0
     ) %>%
-    select(city, season, method, n, mean_crps, crps_improvement_pct)
+    select(city, season, method, n, mean_crps, median_crps, sd_crps, crps_improvement_pct)
   
   seasonal_comparison_full <- bind_rows(
     raw_for_table,
     seasonal_comparison %>% 
-      select(city, season, method, n, mean_crps, crps_improvement_pct)
+      select(city, season, method, n, mean_crps, median_crps, sd_crps, crps_improvement_pct)
   ) %>%
     arrange(city, season, method)
   
-  # 4. Print formatted results
+  # 5. Print formatted results
   cat("\n=== SEASONAL CRPS PERFORMANCE ===\n\n")
   
   for(city_name in unique(seasonal_comparison_full$city)) {
@@ -2393,7 +2408,7 @@ analyze_seasonal_performance <- function(results, data_amsterdam, data_rotterdam
     print(city_wide, n = Inf)
   }
   
-  # 5. Best performing season analysis
+  # 6. Best performing season analysis
   cat("\n\n=== BEST PERFORMING SEASONS ===\n")
   
   best_seasons <- seasonal_comparison %>%
@@ -2405,7 +2420,7 @@ analyze_seasonal_performance <- function(results, data_amsterdam, data_rotterdam
   
   print(best_seasons, n = Inf)
   
-  # 6. Worst performing season analysis
+  # 7. Worst performing season analysis
   cat("\n\n=== MOST CHALLENGING SEASONS ===\n")
   
   worst_seasons <- seasonal_comparison %>%
@@ -2417,7 +2432,7 @@ analyze_seasonal_performance <- function(results, data_amsterdam, data_rotterdam
   
   print(worst_seasons, n = Inf)
   
-  # 7. Overall seasonal patterns
+  # 8. Overall seasonal patterns
   cat("\n\n=== AVERAGE IMPROVEMENT BY SEASON (All Methods) ===\n")
   
   seasonal_avg <- seasonal_comparison %>%
@@ -2435,11 +2450,13 @@ analyze_seasonal_performance <- function(results, data_amsterdam, data_rotterdam
   
   print(seasonal_avg)
   
+  # Return all results
   return(list(
     seasonal_comparison = seasonal_comparison,
     seasonal_comparison_full = seasonal_comparison_full,
     seasonal_avg = seasonal_avg,
-    best_seasons = best_seasons
+    best_seasons = best_seasons,
+    worst_seasons = worst_seasons
   ))
 }
 
@@ -2491,10 +2508,10 @@ plot_seasonal_analysis <- function(seasonal_analysis) {
 
 # Run the seasonal analysis
 seasonal_analysis <- analyze_seasonal_performance(
-  results = results,  # Your post-processing results
+  results = results_vs_wow,  # Your post-processing results
   data_amsterdam = data_amsterdam,
   data_rotterdam = data_rotterdam,
-  lead_time = 6
+  lead_time = 24
 )
 
 # Create visualizations
@@ -2524,7 +2541,7 @@ library(ggplot2)
 # Main PEV calculation function
 calculate_pev <- function(obs, pred_mean, pred_sd, threshold, cost_loss_ratio) {
   
-  # Remove NAs
+  # Remove N
   valid_idx <- !is.na(obs) & !is.na(pred_mean) & !is.na(pred_sd)
   obs <- obs[valid_idx]
   pred_mean <- pred_mean[valid_idx]

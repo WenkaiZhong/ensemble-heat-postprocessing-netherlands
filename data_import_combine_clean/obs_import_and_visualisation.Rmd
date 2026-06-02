@@ -1,0 +1,144 @@
+```{r}
+#rm(list = ls())
+#install.packages("readr")
+library(readr)
+#install.packages("dplyr")
+library(dplyr)
+#install.packages("lubridate")
+library(lubridate)
+#install.packages("ggplot2")
+library(ggplot2)
+```
+output: html_document
+---
+#These are the files starting with "kis". It contains 10-min observations at stations between 2021 and 2024 following the link I sent you. You would have to subset it to match the time resolution of the forecasts, and combine the different years and months together.
+#Source: https://dataplatform.knmi.nl/dataset/vochtigheid-en-temperatuur-1-0
+
+#function to import official station data
+```{r}
+import_knmi_data <- function(date_str, 
+                            data_path = "data/ToSend-01-20-2025/", 
+                            skip_lines = 22,
+                            filter_date = TRUE) {
+  
+  # Parse the date
+  date_obj <- as.Date(date_str)
+  
+  # Extract year and month for filename
+  year_month <- format(date_obj, "%Y%m")
+  
+  # Construct filename
+  filename <- paste0(data_path, "kis_tot_", year_month, ".gz")
+  
+  # Check if file exists
+  if (!file.exists(filename)) {
+    stop(paste("File not found:", filename))
+  }
+  
+  # Read the data with fixed width format
+  data <- read_fwf(
+    filename,
+    skip = skip_lines,
+    col_positions = fwf_positions(
+      start = c(1,    # DTG
+                22,   # LOCATION
+                36,   # NAME
+                84,   # LATITUDE
+                105,  # LONGITUDE
+                125,  # ALTITUDE
+                145,  # U_BOOL_10
+                165,  # T_DRYB_10
+                185,  # TN_10CM_PAST_6H_10
+                205,  # T_DEWP_10
+                225,  # T_DEWP_SEA_10
+                245,  # T_DRYB_SEA_10
+                265,  # TN_DRYB_10
+                285,  # T_WETB_10
+                305,  # TX_DRYB_10
+                325,  # U_10
+                345), # U_SEA_10
+      end = c(20,   # DTG
+              34,   # LOCATION
+              83,   # NAME
+              103,  # LATITUDE
+              123,  # LONGITUDE
+              143,  # ALTITUDE
+              163,  # U_BOOL_10
+              183,  # T_DRYB_10
+              203,  # TN_10CM_PAST_6H_10
+              223,  # T_DEWP_10
+              243,  # T_DEWP_SEA_10
+              263,  # T_DRYB_SEA_10
+              283,  # TN_DRYB_10
+              303,  # T_WETB_10
+              323,  # TX_DRYB_10
+              343,  # U_10
+              NA),  # U_SEA_10 (end of line)
+      col_names = c("DTG", "LOCATION", "NAME", "LATITUDE", "LONGITUDE", "ALTITUDE", 
+                    "U_BOOL_10", "T_DRYB_10", "TN_10CM_PAST_6H_10", "T_DEWP_10", 
+                    "T_DEWP_SEA_10", "T_DRYB_SEA_10", "TN_DRYB_10", "T_WETB_10", 
+                    "TX_DRYB_10", "U_10", "U_SEA_10")
+    ),
+    na = c("", "NA", "-999", "-999.0"),
+    col_types = cols(
+      DTG = col_datetime(format = "%Y-%m-%d %H:%M:%S"),
+      LATITUDE = col_double(),
+      LONGITUDE = col_double(),
+      ALTITUDE = col_double(),
+      U_BOOL_10 = col_integer(),
+      T_DRYB_10 = col_double(),
+      TN_10CM_PAST_6H_10 = col_double(),
+      T_DEWP_10 = col_double(),
+      T_DEWP_SEA_10 = col_double(),
+      T_DRYB_SEA_10 = col_double(),
+      TN_DRYB_10 = col_double(),
+      T_WETB_10 = col_double(),
+      TX_DRYB_10 = col_double(),
+      U_10 = col_double(),
+      U_SEA_10 = col_double(),
+      .default = col_character()
+    ),
+    trim_ws = TRUE
+  )
+  
+  # Filter to specific date if requested
+  if (filter_date) {
+    data <- data %>%
+      filter(as.Date(DTG) == date_obj)
+  }
+  
+  # Add some useful derived columns
+  data <- data %>%
+    mutate(
+      date = as.Date(DTG),
+      hour = hour(DTG),
+      .after = DTG
+    )%>%select(-U_SEA_10,-U_BOOL_10,-T_DRYB_SEA_10,-TN_DRYB_10,-TN_10CM_PAST_6H_10,-T_DEWP_SEA_10)
+  
+  return(data)
+}
+
+data <- import_knmi_data("2021-07-31")
+data
+
+location_table <- unique(data[, c("LOCATION", "NAME", "LATITUDE", "LONGITUDE","ALTITUDE")])
+#location_table
+```
+
+
+#some visualisation tests
+```{r}
+print(paste("Number of stations:", n_distinct(data$LOCATION)))
+print("Station names:")
+print(unique(data$LOCATION))
+
+
+data%>%filter(LOCATION == "201_T_DV")%>%ggplot(., aes(x = DTG, y = T_DRYB_10, color = LOCATION)) +
+  geom_line(size = 1) +
+  labs(title = "Temperature on June 3, 2021 - All Stations",
+       x = "Time",
+       y = "Temperature (°C)") +
+  theme_minimal()
+
+```
+

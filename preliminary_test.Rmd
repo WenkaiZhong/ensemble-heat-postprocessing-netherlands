@@ -1,26 +1,39 @@
----
-title: "preliminary_test_visualisation_forecast"
-author: "Wenkai_Zhong"
-date: "2025-07-10"
-output: html_document
----
+# Display the lines
+for(i in 1:length(lines_to_check)) {
+  cat(sprintf("Line %d: %s\n", 192119 + i, lines_to_check[i]))
+}
+```
+```{r}
+install.packages("tidyverse")
+library(tidyverse)
+install.packages("data.table")
+library(data.table)
 
-```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = TRUE)
+kis_tot_202106 <- read_fwf(nitr::opts_chunk$set(echo = TRUE)
 #change R language to english
 Sys.setlocale("LC_TIME", "English")
 rm(list = ls())
 
+install.packages("R.utils")
 library(R.utils)
+install.packages("ggplot2")
 library(ggplot2)
+install.packages("patchwork")
 library(patchwork)
+install.packages("lubridate")
 library(lubridate)
+install.packages("here")
 library(here)
+install.packages("ncdf4")
 library(ncdf4)
+install.packages("ggrepel")
 library(ggrepel)
+install.packages("tidyverse")
 library(tidyverse)
+install.packages("plotly")
 library(plotly)
 
+install.packages("jsonlite")
 library(jsonlite)
 #library(sf)
 #library(rnaturalearth)

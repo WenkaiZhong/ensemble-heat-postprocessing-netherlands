@@ -1,0 +1,78 @@
+---
+title: "Visualisation 4.3 — CRPS Comparison: Post-Processing Methods vs WOW Max"
+author: "Wenkai_Zhong"
+output: html_document
+---
+
+Two-panel bar chart reproducing the figure from `main_analysis.Rmd`:
+
+- **Top**: Mean CRPS of RAW / EMOS / QR / RF, evaluated against WOW max WBGT
+- **Bottom**: % improvement of post-processed methods over the raw ensemble
+
+The summary data (`crps_wow_comparison.rds`, 8 rows = 4 methods × 2 cities)
+was pre-computed in `main_analysis.Rmd` via
+`analyze_vs_wow() %>% create_wow_comparison_table()` and stored in
+`Visualisation_data/`. This file just loads it and plots.
+
+# Setup
+
+```{r setup, message=FALSE, warning=FALSE}
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(here)
+```
+
+# Load summary data
+
+```{r load-data}
+data_path <- here("Visualisation_and_its_data", "Visualisation_data")
+comparison_wow <- read.csv(file.path(data_path, "comparison_table_vs_wow.csv"))
+
+print(comparison_wow)
+```
+
+# 4.3 Plot — CRPS Comparison + Improvement over Raw Ensemble
+
+```{r plot-4.3, fig.width=10, fig.height=8}
+plot_data <- comparison_wow %>%
+  mutate(method = factor(method, levels = c("RAW", "EMOS", "QR", "RF")))
+
+# Top panel — absolute mean CRPS
+p1 <- ggplot(plot_data, aes(x = method, y = CRPS_vs_WOW, fill = method)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_text(aes(label = sprintf("%.3f", CRPS_vs_WOW)),
+            vjust = -0.5, size = 3) +
+  facet_wrap(~ city) +
+  scale_fill_manual(values = c("RAW"  = "gray60",
+                               "EMOS" = "#2ca02c",
+                               "QR"   = "#ff7f0e",
+                               "RF"   = "#1f77b4")) +
+  labs(title    = "CRPS Comparison: All Methods vs WOW Max",
+       subtitle = "Lower values indicate better agreement with crowd-sourced maximum WBGT",
+       x        = "Method",
+       y        = "Mean CRPS (vs WOW max)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+# Bottom panel — % improvement over RAW
+p2 <- plot_data %>%
+  filter(method != "RAW") %>%
+  ggplot(aes(x = method, y = CRPS_improvement_pct, fill = method)) +
+  geom_bar(stat = "identity", width = 0.7) +
+  geom_text(aes(label = sprintf("%.1f%%", CRPS_improvement_pct)),
+            vjust = -0.5, size = 3) +
+  geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.5) +
+  facet_wrap(~ city) +
+  scale_fill_manual(values = c("EMOS" = "#2ca02c",
+                               "QR"   = "#ff7f0e",
+                               "RF"   = "#1f77b4")) +
+  labs(title    = "CRPS Improvement over Raw Ensemble",
+       subtitle = "When comparing to WOW max observations",
+       x        = "Post-Processing Method",
+       y        = "Improvement (%)") +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+grid.arrange(p1, p2, ncol = 1)
+```

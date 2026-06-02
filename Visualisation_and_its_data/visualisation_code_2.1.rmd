@@ -1,0 +1,552 @@
+gridpoint     dist is_coast clc_dist0   gp_lat   gp_lon gp_ind sta_lat sta_lon sta_id station_type
+1       891 11.82396        1         0 52.36235 4.632353    167  52.318    4.79    240      primary
+The raw dataset comprises 38 discrete point locations, each corresponding to (and co-located with) a KNMI station rather than a node on a regular latitude–longitude grid. Consequently, the points do not provide continuous spatial coverage, and inter-point spacing is irregular, reflecting the underlying station network rather than a uniform grid structure.
+
+```{r}
+library(dplyr)              # 
+library(ggplot2)            #
+library(sf)                 # 
+library(rnaturalearth)      # ne_countries()
+#install.packages("rnaturalearthhires", epos = "https://ropensci.r-universe.dev")
+library(rnaturalearthhires) # scale = "large" 
+library(ggrepel)            # geom_text_repel, geom_label_repel
+library(here)  
+
+# Function 1: Basic Station Map with Temperature/WBGT Distribution
+plot_station_temperature_map <- function(data, 
+                                        city_name = NULL,
+                                        time_point = NULL, 
+                                        variable = "temperature",
+                                        include_wow = TRUE) {
+  
+  # Select time point
+  if(is.null(time_point)) {
+    plot_data <- data %>%
+      filter(!is.na(WBGT_C)) %>%
+      slice(1)
+  } else {
+    plot_data <- data %>%
+      filter(Valid_datetime == time_point)
+  }
+  
+  if(nrow(plot_data) == 0) {
+    stop("No data available for the specified time point")
+  }
+  
+  # Auto-detect city name if not provided
+  if(is.null(city_name)) {
+    city_name <- plot_data$nearest_city[1]
+  }
+  
+  # Get Netherlands map
+  netherlands <- ne_countries(scale = "large", country = "Netherlands", returnclass = "sf")
+  
+  # Initialize stations dataframe
+  stations_df <- data.frame()
+  
+  # Select which variable to plot
+  if(variable == "temperature") {
+    knmi_value <- plot_data$T_DRYB_10[1]
+    grid_value <- plot_data$Temperature_C[1]
+    color_label <- "Temperature (°C)"
+    midpoint_val <- 15
+  } else {
+    knmi_value <- plot_data$WBGT_obs_10[1]
+    grid_value <- plot_data$WBGT_C[1]
+    color_label <- "WBGT (°C)"
+    midpoint_val <- 20
+  }
+  
+  # Debug: Print KNMI value
+  if(is.na(knmi_value)) {
+    cat("Note: KNMI", ifelse(variable == "temperature", "temperature", "WBGT"), 
+        "value is NA for station", plot_data$station_id[1], "\n")
+  }
+  
+  # Add city center
+  stations_df <- rbind(stations_df, data.frame(
+    lon = plot_data$nearest_city_lon[1],
+    lat = plot_data$nearest_city_lat[1],
+    type = "City Center",
+    name = city_name,
+    value = NA,
+    distance_km = 0,
+    data_source = "Reference"
+  ))
+  
+  # Add KNMI station
+  if(!is.na(knmi_value)) {
+    stations_df <- rbind(stations_df, data.frame(
+      lon = plot_data$station_lon[1],
+      lat = plot_data$station_lat[1],
+      type = "KNMI Station",
+      name = paste("KNMI", plot_data$station_id[1]),
+      value = knmi_value,
+      distance_km = plot_data$nearest_city_distance_km[1],
+      data_source = "Official"
+    ))
+  } else {
+    stations_df <- rbind(stations_df, data.frame(
+      lon = plot_data$station_lon[1],
+      lat = plot_data$station_lat[1],
+      type = "KNMI Station",
+      name = paste("KNMI", plot_data$station_id[1]),
+      value = NA,
+      distance_km = plot_data$nearest_city_distance_km[1],
+      data_source = "Official"
+    ))
+  }
+  
+  # Add gridpoint
+  stations_df <- rbind(stations_df, data.frame(
+    lon = plot_data$gridpoint_lon[1],
+    lat = plot_data$gridpoint_lat[1],
+    type = "Model Gridpoint",
+    name = paste("Grid", plot_data$Gridpoint_ID[1]),
+    value = grid_value,
+    distance_km = plot_data$gridpoint_to_station_dist[1],
+    data_source = "Model"
+  ))
+  
+  # Add WOW stations if requested and available
+  if(include_wow && !is.na(plot_data$wow_data_available[1]) && plot_data$wow_data_available[1] == TRUE) {
+    for(i in 1:5) {
+      wow_id_col <- paste0("wow_station_", i, "_ExternalSiteId")
+      wow_lat_col <- paste0("wow_station_", i, "_Latitude")
+      wow_lon_col <- paste0("wow_station_", i, "_Longitude")
+      wow_val_col <- if(variable == "temperature") {
+        paste0("wow_station_", i, "_station_temp")
+      } else {
+        paste0("wow_station_", i, "_station_wbgt")
+      }
+      
+      if(wow_id_col %in% names(plot_data) && 
+         !is.na(plot_data[[wow_id_col]][1]) && 
+         !is.na(plot_data[[wow_val_col]][1])) {
+        stations_df <- rbind(stations_df, data.frame(
+          lon = plot_data[[wow_lon_col]][1],
+          lat = plot_data[[wow_lat_col]][1],
+          type = "WOW Station",
+          name = paste0("WOW", i),
+          value = plot_data[[wow_val_col]][1],
+          distance_km = NA,
+          data_source = "Citizen"
+        ))
+      }
+    }
+  }
+  
+  # Calculate map bounds
+  lon_range <- range(stations_df$lon, na.rm = TRUE)
+  lat_range <- range(stations_df$lat, na.rm = TRUE)
+  
+  # Add buffer
+  lon_buffer <- diff(lon_range) * 0.3
+  lat_buffer <- diff(lat_range) * 0.3
+  
+  # Get city center coordinates for connections
+  city_center <- stations_df[stations_df$type == "City Center", ]
+  
+  # Create the plot
+  p <- ggplot() +
+    # Netherlands background
+    geom_sf(data = netherlands, fill = "lightgray", color = "darkgray", alpha = 0.5) +
+    coord_sf(xlim = lon_range + c(-lon_buffer, lon_buffer),
+             ylim = lat_range + c(-lat_buffer, lat_buffer)) +
+    
+    # Add connections to city center
+    geom_segment(data = stations_df[stations_df$type != "City Center",],
+                 aes(x = city_center$lon[1],
+                     y = city_center$lat[1],
+                     xend = lon, yend = lat),
+                 color = "gray70", linetype = "dashed", alpha = 0.3) +
+    
+    # Add stations
+    geom_point(data = stations_df,
+               aes(x = lon, y = lat, 
+                   color = value, 
+                   shape = type, 
+                   size = type),
+               stroke = 1.5) +
+    
+    # Add value labels with ggrepel
+    ggrepel::geom_text_repel(
+      data = stations_df[!is.na(stations_df$value),],
+      aes(x = lon, y = lat, 
+          label = sprintf("%.1f°C", value)),
+      size = 3, 
+      fontface = "bold",
+      box.padding = 0.5,
+      point.padding = 0.3,
+      segment.color = 'grey50',
+      segment.size = 0.2,
+      max.overlaps = Inf,
+      seed = 42,  # For reproducible positioning
+      nudge_y = 0.01
+    ) +
+    
+    # Add station names with ggrepel
+    ggrepel::geom_label_repel(
+      data = stations_df,
+      aes(x = lon, y = lat, label = name),
+      size = 2.5, 
+      alpha = 0.9,
+      box.padding = 0.35,
+      point.padding = 0.3,
+      label.padding = 0.15,
+      segment.color = 'grey70',
+      segment.size = 0.2,
+      max.overlaps = Inf,
+      seed = 42,
+      nudge_y = -0.015,
+      fill = "white"
+    ) +
+    
+    # Color scale
+    scale_color_gradient2(
+      low = "blue", mid = "yellow", high = "red",
+      midpoint = midpoint_val,
+      name = color_label,
+      na.value = "gray50",
+      limits = c(min(stations_df$value, na.rm = TRUE) - 2,
+                 max(stations_df$value, na.rm = TRUE) + 2)
+    ) +
+    
+    # Shape and size scales
+    scale_shape_manual(
+      values = c("City Center" = 15, 
+                 "KNMI Station" = 17, 
+                 "Model Gridpoint" = 16,
+                 "WOW Station" = 19),
+      name = "Station Type"
+    ) +
+    scale_size_manual(
+      values = c("City Center" = 6, 
+                 "KNMI Station" = 5, 
+                 "Model Gridpoint" = 4,
+                 "WOW Station" = 3.5),
+      guide = "none"
+    ) +
+    
+    # Labels and theme
+    labs(
+      title = sprintf("%s Distribution across %s Weather Stations", 
+                     ifelse(variable == "temperature", "Temperature", "WBGT"), 
+                     city_name),
+      subtitle = sprintf("Time: %s | WOW Coverage: %.0f%% | Quality: %s",
+                        format(plot_data$Valid_datetime[1], "%Y-%m-%d %H:%M"),
+                        ifelse(is.na(plot_data$wow_coverage[1]), 0, plot_data$wow_coverage[1] * 100),
+                        ifelse(is.na(plot_data$wow_data_quality[1]), "N/A", plot_data$wow_data_quality[1])),
+      x = "Longitude",
+      y = "Latitude",
+      caption = "Data sources: KNMI official stations, ECMWF model gridpoints, WOW citizen stations"
+    ) +
+    theme_minimal() +
+    theme(
+      legend.position = "right",
+      panel.grid.major = element_line(color = "gray90", linewidth = 0.3),
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", size = 14),
+      plot.subtitle = element_text(size = 10)
+    )
+  
+  return(p)
+}
+# Function 2: Simple Heat Map without interpolation
+plot_temperature_heatmap_simple <- function(data, 
+                                           city_name = NULL,
+                                           time_point = NULL,
+                                           variable = "wbgt") {
+  
+  # Select time point
+  if(is.null(time_point)) {
+    plot_data <- data %>%
+      filter(!is.na(wow_data_available) & wow_data_available == TRUE) %>%
+      slice(1)
+  } else {
+    plot_data <- data %>%
+      filter(Valid_datetime == time_point)
+  }
+  
+  if(nrow(plot_data) == 0) {
+    warning("No data with WOW stations available for the specified time point")
+    return(NULL)
+  }
+  
+  # Auto-detect city name
+  if(is.null(city_name)) {
+    city_name <- plot_data$nearest_city[1]
+  }
+  
+  # Collect all station data
+  stations_df <- data.frame()
+  
+  # Select variable
+  if(variable == "temperature") {
+    knmi_val <- plot_data$T_DRYB_10[1]
+    grid_val <- plot_data$Temperature_C[1]
+    var_label <- "Temperature (°C)"
+  } else {
+    knmi_val <- plot_data$WBGT_obs_10[1]
+    grid_val <- plot_data$WBGT_C[1]
+    var_label <- "WBGT (°C)"
+  }
+  
+  # Add city center
+  stations_df <- rbind(stations_df, data.frame(
+    lon = plot_data$nearest_city_lon[1],
+    lat = plot_data$nearest_city_lat[1],
+    value = NA,
+    type = "City Center",
+    label = city_name
+  ))
+  
+  # Add KNMI station
+  stations_df <- rbind(stations_df, data.frame(
+    lon = plot_data$station_lon[1],
+    lat = plot_data$station_lat[1],
+    value = knmi_val,
+    type = "KNMI",
+    label = plot_data$station_id[1]
+  ))
+  
+  # Add gridpoint
+  stations_df <- rbind(stations_df, data.frame(
+    lon = plot_data$gridpoint_lon[1],
+    lat = plot_data$gridpoint_lat[1],
+    value = grid_val,
+    type = "Model",
+    label = paste("Grid", plot_data$Gridpoint_ID[1])
+  ))
+  
+  # Add WOW stations
+  for(i in 1:5) {
+    wow_lon <- plot_data[[paste0("wow_station_", i, "_Longitude")]][1]
+    wow_lat <- plot_data[[paste0("wow_station_", i, "_Latitude")]][1]
+    wow_val <- if(variable == "temperature") {
+      plot_data[[paste0("wow_station_", i, "_station_temp")]][1]
+    } else {
+      plot_data[[paste0("wow_station_", i, "_station_wbgt")]][1]
+    }
+    
+    if(!is.na(wow_lon) && !is.na(wow_lat) && !is.na(wow_val)) {
+      stations_df <- rbind(stations_df, data.frame(
+        lon = wow_lon,
+        lat = wow_lat,
+        value = wow_val,
+        type = "WOW",
+        label = paste0("WOW", i)
+      ))
+    }
+  }
+  
+  # Calculate bounds
+  lon_range <- range(stations_df$lon, na.rm = TRUE)
+  lat_range <- range(stations_df$lat, na.rm = TRUE)
+  lon_buffer <- diff(lon_range) * 0.2
+  lat_buffer <- diff(lat_range) * 0.2
+  
+  # Create plot with better text positioning
+  p <- ggplot(stations_df) +
+    # Add points with size proportional to value
+    geom_point(data = stations_df[!is.na(stations_df$value),],
+               aes(x = lon, y = lat, 
+                   color = value, 
+                   size = value),
+               alpha = 0.7) +
+    
+    # Add city center
+    geom_point(data = stations_df[stations_df$type == "City Center",],
+               aes(x = lon, y = lat),
+               color = "red", shape = 18, size = 5) +
+    
+    # Use ggrepel for station labels
+    ggrepel::geom_label_repel(
+      data = stations_df,
+      aes(x = lon, y = lat, label = label),
+      size = 2.5,
+      box.padding = 0.35,
+      point.padding = 0.3,
+      segment.color = 'grey50',
+      segment.size = 0.2,
+      max.overlaps = Inf,
+      alpha = 0.9,
+      seed = 42,
+      fill = "white"
+    ) +
+    
+    # Use ggrepel for value labels
+    ggrepel::geom_text_repel(
+      data = stations_df[!is.na(stations_df$value),],
+      aes(x = lon, y = lat, 
+          label = sprintf("%.1f°C", value)),
+      size = 3, 
+      fontface = "bold",
+      box.padding = 0.25,
+      point.padding = 0.25,
+      segment.color = 'grey30',
+      segment.size = 0.2,
+      max.overlaps = Inf,
+      seed = 42
+    ) +
+    
+    # Color scale
+    scale_color_gradient2(
+      low = "blue", mid = "yellow", high = "red",
+      midpoint = ifelse(variable == "temperature", 15, 20),
+      name = var_label
+    ) +
+    
+    scale_size_continuous(
+      range = c(5, 15),
+      guide = "none"
+    ) +
+    
+    # Labels and theme
+    labs(
+      title = sprintf("%s Distribution - %s", var_label, city_name),
+      subtitle = sprintf("Time: %s | %d stations reporting",
+                        format(plot_data$Valid_datetime[1], "%Y-%m-%d %H:%M"),
+                        sum(!is.na(stations_df$value))),
+      x = "Longitude",
+      y = "Latitude",
+      caption = "Red diamond: city center | Circle size: value magnitude"
+    ) +
+    coord_fixed(ratio = 1.3) +
+    xlim(lon_range[1] - lon_buffer, lon_range[2] + lon_buffer) +
+    ylim(lat_range[1] - lat_buffer, lat_range[2] + lat_buffer) +
+    theme_minimal() +
+    theme(
+      panel.grid.major = element_line(color = "gray90"),
+      panel.grid.minor = element_blank(),
+      plot.title = element_text(face = "bold", size = 14)
+    )
+  
+  return(p)
+}
+
+# Function 3: Time Series Comparison Plot (保持不变)
+plot_station_timeseries <- function(data, 
+                                   city_name = NULL,
+                                   hours_to_plot = 24) {
+  
+  # Auto-detect city name
+  if(is.null(city_name)) {
+    city_name <- unique(data$nearest_city)[1]
+  }
+  
+  # Filter to recent hours
+  latest_time <- max(data$Valid_datetime, na.rm = TRUE)
+  start_time <- latest_time - (hours_to_plot * 3600)
+  
+  plot_data <- data %>%
+    filter(Valid_datetime >= start_time & Valid_datetime <= latest_time)
+  
+  # Prepare long format data for plotting
+  time_series_data <- plot_data %>%
+    select(Valid_datetime, 
+           KNMI = WBGT_obs_10,
+           Model = WBGT_C,
+           WOW_Mean = wow_wbgt_mean,
+           WOW_Max = wow_wbgt_max) %>%
+    pivot_longer(cols = -Valid_datetime,
+                names_to = "Source",
+                values_to = "WBGT")
+  
+  # Create time series plot
+  p <- ggplot(time_series_data, aes(x = Valid_datetime, y = WBGT)) +
+    geom_line(aes(color = Source), linewidth = 1.2, na.rm = TRUE) +
+    geom_point(aes(color = Source, shape = Source), size = 2, na.rm = TRUE) +
+    
+    scale_color_manual(values = c("KNMI" = "darkgreen",
+                                  "Model" = "blue",
+                                  "WOW_Mean" = "purple",
+                                  "WOW_Max" = "red")) +
+    
+    labs(title = sprintf("WBGT Time Series Comparison - %s", city_name),
+         subtitle = sprintf("Last %d hours | Mean WOW stations: %.1f",
+                           hours_to_plot,
+                           mean(plot_data$wow_n_stations, na.rm = TRUE)),
+         x = "Time",
+         y = "WBGT (°C)",
+         color = "Data Source",
+         shape = "Data Source") +
+    
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  # Add uncertainty band if data is available
+  if(all(c("wow_wbgt_min", "wow_wbgt_max") %in% names(plot_data))) {
+    ribbon_data <- plot_data %>%
+      filter(!is.na(wow_wbgt_min) & !is.na(wow_wbgt_max))
+    
+    if(nrow(ribbon_data) > 0) {
+      p <- p + geom_ribbon(data = ribbon_data,
+                          aes(x = Valid_datetime,
+                              ymin = wow_wbgt_min,
+                              ymax = wow_wbgt_max),
+                          alpha = 0.2, fill = "purple",
+                          inherit.aes = FALSE)
+    }
+  }
+  
+  return(p)
+}
+# Wrapper function to create all maps for a city
+create_city_analysis_maps <- function(data, city_name = NULL, time_point = NULL) {
+  
+  # Create a list to store all plots
+  plots <- list()
+  
+  # Temperature map
+  plots$temp_map <- plot_station_temperature_map(
+    data, 
+    city_name = city_name,
+    time_point = time_point,
+    variable = "temperature",
+    include_wow = TRUE
+  )
+  
+  # WBGT map
+  plots$wbgt_map <- plot_station_temperature_map(
+    data, 
+    city_name = city_name,
+    time_point = time_point,
+    variable = "wbgt",
+    include_wow = TRUE
+  )
+  
+  # Simple heat map
+  plots$heatmap <- plot_temperature_heatmap_simple(
+    data,
+    city_name = city_name,
+    time_point = time_point,
+    variable = "wbgt"
+  )
+  
+  # Time series
+  plots$timeseries <- plot_station_timeseries(
+    data,
+    city_name = city_name,
+    hours_to_plot = 24
+  )
+  
+  return(plots)
+}
+
+
+data_amsterdam <- readRDS(here("Visualisation_and_its_data/Visualisation_data", "data_amsterdam_processed.rds"))
+
+amsterdam_maps <- create_city_analysis_maps(
+  data_amsterdam,
+  city_name = "Amsterdam",
+  time_point = as.POSIXct("2022-07-15 12:00:00", tz = "UTC")### Hi kate, here is the place to adjust time
+)
+
+
+# shows map
+print(amsterdam_maps$temp_map)
+print(amsterdam_maps$wbgt_map)
+print(amsterdam_maps$heatmap)
+```
