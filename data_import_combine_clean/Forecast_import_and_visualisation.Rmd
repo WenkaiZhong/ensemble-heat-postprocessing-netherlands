@@ -130,7 +130,7 @@ read_data <- function(year, var_type, data_dir = here("data", "ToSend-01-20-2025
 }
 
 # Test
-# temp_2023 <- read_data(2023, "2t")  # Read combined_raw_2t_2021.nc
+temp_2023 <- read_data(2023, "2t")  # Read combined_raw_2t_2021.nc
 # dewp_2021 <- read_data(2021, "2d")  # Read combined_raw_2d_2021.nc
 # temp_2023_start_time <- temp_2023$runtime_units
 # temp_2023_start_time
@@ -182,8 +182,8 @@ tidy_formation <- function(data, gridpoint_idx, validtime_idx) {
 
 # Example usage and verification
 # # Convert specific validtime to tidy format
-# temp_example_day <- tidy_formation(temp_2023, gridpoint_idx = 1, validtime_idx = 1)
-# temp_example_day
+temp_example_day <- tidy_formation(temp_2023, gridpoint_idx = 1, validtime_idx = 1)
+temp_example_day
 # 
 # dewp_example_day <- tidy_formation(dewp_2021, gridpoint_idx = 1, validtime_idx = 1)
 # dewp_example_day
