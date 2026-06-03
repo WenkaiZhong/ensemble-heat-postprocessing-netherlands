@@ -1,0 +1,907 @@
+#load packages
+```{r}
+install.packages("purrr")
+library(purrr)  # for map functions
+install.packages("tidyr")
+library(tidyr)  # for nest and pivot_wider
+```
+
+
+#post-processing
+```{r}
+# ============================================
+#     EMOS POST-PROCESSING - FIXED VERSION
+# ============================================
+
+install.packages("dplyr")
+library(dplyr)
+install.packages("tidyr")
+library(tidyr)
+install.packages("compiler")
+library(compiler)SSING - FIXED VERSION
+# ============================================
+
+library(dplyr)
+library(tidyr)
+library(compiler)
+
+# -------------------------------------------------------------------
+# Fixed CRPS Functions
+# -------------------------------------------------------------------
+
+# CRPS for parameter optimization - FIXED
+crps.normal <- function(param, t.obs, t.ens, t.var, K) {
+  param[-1] <- param[-1]^2
+  
+  # Ensure proper matrix multiplication
+  if(is.matrix(t.ens)) {
+    MEAN <- as.vector(t.ens %*% param[1:K])
+  } else {
+    MEAN <- param[1] + param[2] * t.ens
+  }
+  
+  VAR <- param[K + 1] + param[K + 2] * t.var
+  VAR[VAR <= 0] <- 1e-6  # Prevent negative variance
+  SIGMA <- sqrt(VAR)
+  
+  obs.stdz <- (t.obs - MEAN) / SIGMA
+  crps.obs <- SIGMA * (obs.stdz * (2 * pnorm(obs.stdz, 0, 1) - 1) + 
+                       2 * dnorm(obs.stdz, 0, 1) - 1 / sqrt(pi))
+  
+  return(sum(crps.obs, na.rm = TRUE))
+}
+crps.normal <- cmpfun(crps.normal)
+
+# Other CRPS functions remain the same
+crps.ensemble <- function(obs, fcst) {
+  fcst <- sort(fcst)
+  fun.ecdf <- ecdf(fcst)
+  diff <- diff(sort(c(fcst, obs)))
+  cdfs <- fun.ecdf(sort(c(fcst, obs)))[1:length(fcst)]
+  crps <- sum((cdfs - (fcst > obs))^2 * diff)
+  return(crps)
+}
+
+crps.norm <- function(obs, mu, sd) {
+  if(sd <= 0) sd <- 1e-6
+  sd * ((obs - mu) / sd * (2 * pnorm((obs - mu) / sd) - 1) + 
+        2 * dnorm((obs - mu) / sd) - 1 / sqrt(pi))
+}
+
+# -------------------------------------------------------------------
+# Simplified EMOS function
+# -------------------------------------------------------------------
+
+run_emos_simplified <- function(data, 
+                               lead_time = 6,
+                               training_days = 30,
+                               obs_column = "T_DRYB_10") {
+  
+  # Filter and prepare data
+  data_lt <- data %>%
+    filter(lead_time_hrs == lead_time)
+  
+  # Aggregate by time
+  data_agg <- data_lt %>%
+    group_by(Valid_datetime, season) %>%
+    summarise(
+      ens_mean = mean(Temperature_C, na.rm = TRUE),
+      ens_var = var(Temperature_C, na.rm = TRUE),
+      obs = first(!!sym(obs_column)),
+      ens_values = list(Temperature_C),
+      .groups = 'drop'
+    ) %>%
+    filter(!is.na(obs)) %>%
+    arrange(Valid_datetime)
+  
+  n_times <- nrow(data_agg)
+  cat(sprintf("Processing %d time points with observations\n", n_times))
+  
+  # Initialize results
+  results_list <- list()
+  
+  # Loop through time windows
+  for(i in (training_days + 1):n_times) {
+    
+    # Training window
+    train_idx <- (i - training_days):(i - 1)
+    train_data <- data_agg[train_idx, ]
+    valid_data <- data_agg[i, ]
+    
+    # Skip if missing data
+    if(any(is.na(train_data$ens_mean)) || any(is.na(train_data$obs))) next
+    
+    # Fit simple linear model for initialization
+    lm_fit <- lm(obs ~ ens_mean, data = train_data)
+    
+    # Initial parameters
+    a_init <- coef(lm_fit)[1]
+    b_init <- max(0.1, coef(lm_fit)[2])  # Ensure positive
+    c_init <- 5
+    d_init <- 1
+    
+    params_init <- c(a_init, sqrt(b_init), sqrt(c_init), sqrt(d_init))
+    
+    # Prepare optimization data
+    t_obs <- train_data$obs
+    t_ens <- as.matrix(cbind(1, train_data$ens_mean))
+    t_var <- train_data$ens_var
+    
+    # Optimize
+    opt_result <- tryCatch({
+      optim(params_init, crps.normal,
+            t.obs = t_obs,
+            t.ens = t_ens,
+            t.var = t_var,
+            K = 2,
+            method = "BFGS",
+            control = list(maxit = 1000))
+    }, error = function(e) {
+      cat(sprintf("Optimization failed at time %d: %s\n", i, e$message))
+      return(NULL)
+    })
+    
+    if(is.null(opt_result)) next
+    
+    # Extract parameters
+    params <- opt_result$par
+    params[-1] <- params[-1]^2
+    
+    # Make prediction
+    pred_mean <- params[1] + params[2] * valid_data$ens_mean
+    pred_var <- params[3] + params[4] * valid_data$ens_var
+    pred_sd <- sqrt(max(pred_var, 1e-6))
+    
+    # Calculate CRPS
+    crps_emos <- crps.norm(valid_data$obs, pred_mean, pred_sd)
+    crps_raw <- crps.ensemble(valid_data$obs, unlist(valid_data$ens_values))
+    
+    # Store result
+    results_list[[length(results_list) + 1]] <- data.frame(
+      time = valid_data$Valid_datetime,
+      season = valid_data$season,
+      obs = valid_data$obs,
+      pred_mean = pred_mean,
+      pred_sd = pred_sd,
+      crps_emos = crps_emos,
+      crps_raw = crps_raw,
+      improvement = crps_raw - crps_emos
+    )
+  }
+  
+  # Combine results
+  if(length(results_list) > 0) {
+    results <- bind_rows(results_list)
+    
+    # Summary
+    cat("\n===== RESULTS SUMMARY =====\n")
+    summary_stats <- results %>%
+      group_by(season) %>%
+      summarise(
+        n = n(),
+        mean_crps_emos = round(mean(crps_emos), 3),
+        mean_crps_raw = round(mean(crps_raw), 3),
+        mean_improvement = round(mean(improvement), 3),
+        .groups = 'drop'
+      )
+    print(summary_stats)
+    
+    return(results)
+  } else {
+    cat("No results generated\n")
+    return(NULL)
+  }
+}
+
+# -------------------------------------------------------------------
+# Run for all observation types
+# -------------------------------------------------------------------
+
+# # Test with official observations first
+# results_official <- run_emos_simplified(
+#   all_seasons_2021_G818,
+#   lead_time = 6,
+#   training_days = 30,
+#   obs_column = "T_DRYB_10"
+# )
+# 
+# # If successful, run for WOW
+# if(!is.null(results_official)) {
+#   results_wow <- run_emos_simplified(
+#     all_seasons_2021_G818,
+#     lead_time = 6,
+#     training_days = 30,
+#     obs_column = "wow_temp_mean"
+#   )
+# }
+
+
+```
+#CROSS-VALIDATION
+```{r}
+# ============================================
+#     CROSS-VALIDATION EMOS FUNCTIONS
+# ============================================
+
+# -------------------------------------------------------------------
+# 1. Data Preparation Function
+# -------------------------------------------------------------------
+
+prepare_cross_validation_data <- function(data, 
+                                         obs_column_knmi = "T_DRYB_10",
+                                         obs_column_wow = "wow_temp_mean") {
+  
+  # Prepare separate datasets for KNMI and WOW
+  data_knmi <- data %>%
+    mutate(obs_source = "KNMI",
+           obs = !!sym(obs_column_knmi)) %>%
+    filter(!is.na(obs))
+  
+  data_wow <- data %>%
+    mutate(obs_source = "WOW",
+           obs = !!sym(obs_column_wow)) %>%
+    filter(!is.na(obs))
+  
+  return(list(knmi = data_knmi, wow = data_wow))
+}
+
+# -------------------------------------------------------------------
+# 2. Training Data Mixing Function
+# -------------------------------------------------------------------
+
+mix_training_data <- function(knmi_data, wow_data, 
+                              mixing_ratio = 0.5,
+                              strategy = "temporal") {
+  
+  if(strategy == "temporal") {
+    # Mix by time - ensure temporal continuity
+    all_times <- sort(unique(c(knmi_data$Valid_datetime, 
+                               wow_data$Valid_datetime)))
+    
+    # Alternate data source every other time point
+    knmi_times <- all_times[seq(1, length(all_times), 2)]
+    wow_times <- all_times[seq(2, length(all_times), 2)]
+    
+    mixed_data <- rbind(
+      filter(knmi_data, Valid_datetime %in% knmi_times),
+      filter(wow_data, Valid_datetime %in% wow_times)
+    ) %>%
+      arrange(Valid_datetime)
+    
+  } else if(strategy == "random") {
+    # Random mixing
+    n_total <- min(nrow(knmi_data), nrow(wow_data))
+    n_knmi <- round(n_total * mixing_ratio)
+    n_wow <- n_total - n_knmi
+    
+    set.seed(123)  # Ensure reproducibility
+    mixed_data <- rbind(
+      sample_n(knmi_data, n_knmi),
+      sample_n(wow_data, n_wow)
+    ) %>%
+      arrange(Valid_datetime)
+    
+  } else if(strategy == "balanced") {
+    # Balanced mixing - each time point includes both data types
+    common_times <- intersect(knmi_data$Valid_datetime, 
+                             wow_data$Valid_datetime)
+    
+    mixed_data <- rbind(
+      filter(knmi_data, Valid_datetime %in% common_times) %>%
+        mutate(weight = mixing_ratio),
+      filter(wow_data, Valid_datetime %in% common_times) %>%
+        mutate(weight = 1 - mixing_ratio)
+    ) %>%
+      arrange(Valid_datetime)
+  }
+  
+  return(mixed_data)
+}
+
+# -------------------------------------------------------------------
+# 3. Core Cross-Validation EMOS Function
+# -------------------------------------------------------------------
+
+run_cross_validation_emos <- function(data,
+                                      train_source = "KNMI", # "KNMI", "WOW", "Mixed"
+                                      test_source = "KNMI",  # "KNMI", "WOW", "Both"
+                                      lead_time = 6,
+                                      training_days = 30,
+                                      mixing_ratio = 0.5,
+                                      mixing_strategy = "temporal") {
+  
+  cat(sprintf("\n=== Running Cross-Validation: %s → %s ===\n", 
+              train_source, test_source))
+  
+  # 1. Prepare data
+  cv_data <- prepare_cross_validation_data(data)
+  knmi_data <- cv_data$knmi
+  wow_data <- cv_data$wow
+  
+  # 2. Select training data
+  if(train_source == "KNMI") {
+    train_pool <- knmi_data
+  } else if(train_source == "WOW") {
+    train_pool <- wow_data
+  } else if(train_source == "Mixed") {
+    train_pool <- mix_training_data(knmi_data, wow_data, 
+                                    mixing_ratio, mixing_strategy)
+  }
+  
+  # 3. Select test data
+  test_pools <- list()
+  if(test_source == "KNMI") {
+    test_pools[["KNMI"]] <- knmi_data
+  } else if(test_source == "WOW") {
+    test_pools[["WOW"]] <- wow_data
+  } else if(test_source == "Both") {
+    test_pools[["KNMI"]] <- knmi_data
+    test_pools[["WOW"]] <- wow_data
+  }
+  
+  # 4. Run EMOS for each test set
+  all_results <- list()
+  
+  for(test_name in names(test_pools)) {
+    test_data <- test_pools[[test_name]]
+    
+    cat(sprintf("  Testing on %s data...\n", test_name))
+    
+    # Filter by lead time
+    train_lt <- train_pool %>%
+      filter(lead_time_hrs == lead_time)
+    test_lt <- test_data %>%
+      filter(lead_time_hrs == lead_time)
+    
+    # Aggregate by time
+    train_agg <- aggregate_ensemble_data(train_lt)
+    test_agg <- aggregate_ensemble_data(test_lt)
+    
+    # Find common time range
+    all_times <- sort(unique(test_agg$Valid_datetime))
+    n_times <- length(all_times)
+    
+    if(n_times < training_days + 10) {
+      cat("    Insufficient data for testing\n")
+      next
+    }
+    
+    # Initialize results for this test set
+    results_list <- list()
+    
+    # Loop through time windows
+    for(i in (training_days + 1):n_times) {
+      
+      # Define training window
+      test_time <- all_times[i]
+      train_times <- all_times[(i - training_days):(i - 1)]
+      
+      # Get training data
+      train_window <- train_agg %>%
+        filter(Valid_datetime %in% train_times)
+      
+      # Get test point
+      test_point <- test_agg %>%
+        filter(Valid_datetime == test_time)
+      
+      if(nrow(train_window) < 20 || nrow(test_point) == 0) next
+      
+      # Optimize EMOS parameters
+      emos_params <- optimize_emos_params(train_window)
+      
+      if(is.null(emos_params)) next
+      
+      # Make prediction
+      pred <- predict_emos(test_point, emos_params)
+      
+      # Calculate scores
+      crps_emos <- crps.norm(test_point$obs, pred$mean, pred$sd)
+      crps_raw <- crps.ensemble(test_point$obs, unlist(test_point$ens_values))
+      
+      # Store results
+      results_list[[length(results_list) + 1]] <- data.frame(
+        time = test_time,
+        season = test_point$season,
+        train_source = train_source,
+        test_source = test_name,
+        obs = test_point$obs,
+        pred_mean = pred$mean,
+        pred_sd = pred$sd,
+        crps_emos = crps_emos,
+        crps_raw = crps_raw,
+        improvement = crps_raw - crps_emos,
+        stringsAsFactors = FALSE
+      )
+    }
+    
+    if(length(results_list) > 0) {
+      all_results[[test_name]] <- bind_rows(results_list)
+    }
+  }
+  
+  # Combine all test results
+  if(length(all_results) > 0) {
+    final_results <- bind_rows(all_results)
+    return(final_results)
+  } else {
+    return(NULL)
+  }
+}
+
+# -------------------------------------------------------------------
+# 4. Helper Functions
+# -------------------------------------------------------------------
+
+aggregate_ensemble_data <- function(data) {
+  data %>%
+    group_by(Valid_datetime, season) %>%
+    summarise(
+      ens_mean = mean(Temperature_C, na.rm = TRUE),
+      ens_var = var(Temperature_C, na.rm = TRUE),
+      obs = first(obs),
+      ens_values = list(Temperature_C),
+      .groups = 'drop'
+    ) %>%
+    filter(!is.na(obs), !is.na(ens_mean), !is.na(ens_var)) %>%
+    arrange(Valid_datetime)
+}
+
+optimize_emos_params <- function(train_data) {
+  
+  # Prepare for optimization
+  lm_fit <- tryCatch({
+    lm(obs ~ ens_mean, data = train_data)
+  }, error = function(e) NULL)
+  
+  if(is.null(lm_fit)) return(NULL)
+  
+  # Initial parameters
+  a_init <- coef(lm_fit)[1]
+  b_init <- max(0.1, coef(lm_fit)[2])
+  c_init <- 5
+  d_init <- 1
+  
+  params_init <- c(a_init, sqrt(b_init), sqrt(c_init), sqrt(d_init))
+  
+  # Prepare data
+  t_obs <- train_data$obs
+  t_ens <- as.matrix(cbind(1, train_data$ens_mean))
+  t_var <- train_data$ens_var
+  
+  # Optimize
+  opt_result <- tryCatch({
+    optim(params_init, crps.normal,
+          t.obs = t_obs,
+          t.ens = t_ens,
+          t.var = t_var,
+          K = 2,
+          method = "BFGS",
+          control = list(maxit = 1000))
+  }, error = function(e) NULL)
+  
+  if(is.null(opt_result)) return(NULL)
+  
+  # Extract parameters
+  params <- opt_result$par
+  params[-1] <- params[-1]^2
+  
+  return(params)
+}
+
+predict_emos <- function(test_data, params) {
+  pred_mean <- params[1] + params[2] * test_data$ens_mean
+  pred_var <- params[3] + params[4] * test_data$ens_var
+  pred_sd <- sqrt(max(pred_var, 1e-6))
+  
+  return(list(mean = pred_mean, sd = pred_sd))
+}
+
+# -------------------------------------------------------------------
+# 5. Main Function to Run All Experiments
+# -------------------------------------------------------------------
+
+run_all_cross_validation_experiments <- function(data, 
+                                                 lead_time = 6,
+                                                 training_days = 30) {
+  
+  # Define all experiments
+  experiments <- list(
+    list(name = "KNMI→KNMI", train = "KNMI", test = "KNMI"),
+    list(name = "WOW→WOW", train = "WOW", test = "WOW"),
+    list(name = "KNMI→WOW", train = "KNMI", test = "WOW"),
+    list(name = "WOW→KNMI", train = "WOW", test = "KNMI"),
+    list(name = "Mixed→Both", train = "Mixed", test = "Both")
+  )
+  
+  # Store all results
+  all_results <- list()
+  
+  # Run each experiment
+  for(exp in experiments) {
+    cat(sprintf("\n========================================\n"))
+    cat(sprintf("Experiment: %s\n", exp$name))
+    cat(sprintf("========================================\n"))
+    
+    results <- run_cross_validation_emos(
+      data = data,
+      train_source = exp$train,
+      test_source = exp$test,
+      lead_time = lead_time,
+      training_days = training_days
+    )
+    
+    if(!is.null(results)) {
+      results$experiment <- exp$name
+      all_results[[exp$name]] <- results
+    }
+  }
+  
+  # Combine results
+  if(length(all_results) > 0) {
+    combined_results <- bind_rows(all_results)
+    
+    # Generate summary
+    summary_results <- combined_results %>%
+      group_by(experiment, train_source, test_source, season) %>%
+      summarise(
+        n = n(),
+        mean_crps_emos = round(mean(crps_emos, na.rm = TRUE), 3),
+        mean_crps_raw = round(mean(crps_raw, na.rm = TRUE), 3),
+        mean_improvement = round(mean(improvement, na.rm = TRUE), 3),
+        improvement_pct = round(mean_improvement / mean_crps_raw * 100, 1),
+        .groups = 'drop'
+      )
+    
+    return(list(
+      detailed = combined_results,
+      summary = summary_results
+    ))
+  } else {
+    return(NULL)
+  }
+}
+```
+
+#PEV and visualisation
+```{r}
+# Main PEV calculation function
+calculate_pev_single <- function(obs, pred_mean, pred_sd, threshold, cost_loss_ratio) {
+  
+  # Remove NAs
+  valid_idx <- !is.na(obs) & !is.na(pred_mean) & !is.na(pred_sd)
+  obs <- obs[valid_idx]
+  pred_mean <- pred_mean[valid_idx]
+  pred_sd <- pred_sd[valid_idx]
+  n <- length(obs)
+  
+  if(n < 10) return(NA)
+  
+  # Calculate forecast probability of exceeding threshold
+  prob_exceed <- 1 - pnorm(threshold, pred_mean, pred_sd)
+  
+  # Binary decision
+  take_action <- prob_exceed > cost_loss_ratio
+  
+  # Observed event
+  event_occurred <- obs > threshold
+  
+  # Contingency table
+  hits <- sum(take_action & event_occurred)
+  false_alarms <- sum(take_action & !event_occurred)
+  misses <- sum(!take_action & event_occurred)
+  
+  # Observed relative frequency
+  orf <- sum(event_occurred) / n
+  
+  if(orf == 0 || orf == 1) return(0)
+  
+  # Calculate expenses
+  expense_forecast <- (hits + false_alarms) * cost_loss_ratio + misses * 1
+  
+  # Climatology expense
+  if(cost_loss_ratio < orf) {
+    expense_clim <- n * cost_loss_ratio
+  } else {
+    expense_clim <- sum(event_occurred) * 1
+  }
+  
+  # Perfect forecast expense
+  expense_perfect <- sum(event_occurred) * cost_loss_ratio
+  
+  # PEV calculation
+  if(abs(expense_clim - expense_perfect) < 1e-10) {
+    pev <- 0
+  } else {
+    pev <- (expense_clim - expense_forecast) / (expense_clim - expense_perfect)
+  }
+  
+  return(pev)
+}
+
+# Calculate PEV curves for multiple experiments
+calculate_pev_curves <- function(cv_results, 
+                                use_percentiles = TRUE,
+                                percentiles = c(75, 85, 90, 95),
+                                fixed_thresholds = c(15, 20, 25, 30)) {
+  
+  # Cost-loss ratios to test
+  cl_ratios <- seq(0.01, 0.50, by = 0.02)
+  
+  # Get all unique experiments
+  experiments <- unique(cv_results$detailed$experiment)
+  seasons <- unique(cv_results$detailed$season)
+  
+  all_pev_results <- list()
+  
+  for(exp in experiments) {
+    for(seas in seasons) {
+      
+      # Filter data
+      exp_data <- cv_results$detailed %>%
+        filter(experiment == exp, season == seas,
+               !is.na(obs), !is.na(pred_mean), !is.na(pred_sd))
+      
+      if(nrow(exp_data) < 30) next
+      
+      # Determine thresholds
+      if(use_percentiles) {
+        thresholds <- quantile(exp_data$obs, percentiles/100, na.rm = TRUE)
+        names(thresholds) <- paste0("P", percentiles)
+      } else {
+        # Adjust for actual temperature scale
+        # Since your data shows max ~30°C in reality, adjust thresholds
+        obs_max <- max(exp_data$obs, na.rm = TRUE)
+        obs_min <- min(exp_data$obs, na.rm = TRUE)
+        
+        # Scale thresholds to actual data range
+        thresholds <- fixed_thresholds[fixed_thresholds > obs_min & 
+                                       fixed_thresholds < obs_max]
+        if(length(thresholds) == 0) {
+          # Use percentiles as fallback
+          thresholds <- quantile(exp_data$obs, c(0.75, 0.90), na.rm = TRUE)
+        }
+      }
+      
+      # Calculate PEV for each threshold
+      for(i in 1:length(thresholds)) {
+        thresh <- thresholds[i]
+        thresh_name <- names(thresholds)[i]
+        
+        pev_values <- sapply(cl_ratios, function(cl) {
+          calculate_pev_single(
+            obs = exp_data$obs,
+            pred_mean = exp_data$pred_mean,
+            pred_sd = exp_data$pred_sd,
+            threshold = thresh,
+            cost_loss_ratio = cl
+          )
+        })
+        
+        # Store results
+        all_pev_results[[length(all_pev_results) + 1]] <- data.frame(
+          experiment = exp,
+          season = seas,
+          threshold = thresh,
+          threshold_name = thresh_name,
+          cost_loss_ratio = cl_ratios,
+          pev = pev_values,
+          stringsAsFactors = FALSE
+        )
+      }
+    }
+  }
+  
+  return(bind_rows(all_pev_results))
+}
+
+# Calculate integrated PEV (area under curve)
+calculate_integrated_pev <- function(pev_curves) {
+  
+  integrated <- pev_curves %>%
+    group_by(experiment, season, threshold_name) %>%
+    summarise(
+      integrated_pev = {
+        valid_idx <- !is.na(pev)
+        if(sum(valid_idx) < 2) {
+          NA
+        } else {
+          x <- cost_loss_ratio[valid_idx]
+          y <- pev[valid_idx]
+          sum(diff(x) * (y[-1] + y[-length(y)]) / 2)
+        }
+      },
+      max_pev = max(pev, na.rm = TRUE),
+      optimal_cl = cost_loss_ratio[which.max(pev)],
+      .groups = 'drop'
+    )
+  
+  return(integrated)
+}
+
+# Visualization function
+plot_pev_comparison <- function(pev_curves, 
+                                selected_season = "Summer",
+                                selected_threshold = "P90") {
+  
+  # Filter data
+  plot_data <- pev_curves %>%
+    filter(season == selected_season,
+           threshold_name == selected_threshold)
+  
+  # Create plot
+  p <- ggplot(plot_data, aes(x = cost_loss_ratio, y = pev, 
+                             color = experiment, linetype = experiment)) +
+    geom_line(size = 1) +
+    geom_point(data = plot_data %>% group_by(experiment) %>% 
+                 slice_max(pev, n = 1),
+               size = 3) +
+    geom_hline(yintercept = 0, linetype = "dashed", alpha = 0.3) +
+    scale_color_brewer(palette = "Set1") +
+    scale_y_continuous(limits = c(-0.2, 1)) +
+    labs(
+      title = sprintf("PEV Curves - %s (%s)", selected_season, selected_threshold),
+      subtitle = "Higher values indicate better economic value",
+      x = "Cost/Loss Ratio",
+      y = "Potential Economic Value",
+      color = "Experiment",
+      linetype = "Experiment"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom")
+  
+  return(p)
+}
+
+# Create summary heatmap
+plot_pev_heatmap <- function(integrated_pev, threshold_name = "P90") {
+  
+  # Filter and prepare data
+  heatmap_data <- integrated_pev %>%
+    filter(threshold_name == threshold_name) %>%
+    mutate(
+      # Shorten experiment labels to avoid overlap
+      experiment_short = case_when(
+        grepl("KNMI→KNMI", experiment) ~ "KNMI→KNMI",
+        grepl("WOW→WOW", experiment) ~ "WOW→WOW",
+        grepl("KNMI→WOW", experiment) ~ "KNMI→WOW",
+        grepl("WOW→KNMI", experiment) ~ "WOW→KNMI",
+        grepl("Mixed→KNMI", experiment) ~ "Mixed→KNMI",
+        grepl("Mixed→WOW", experiment) ~ "Mixed→WOW",
+        TRUE ~ experiment
+      )
+    )
+  
+  # Create plot with adjusted dimensions
+  p <- ggplot(heatmap_data, aes(x = season, y = experiment_short, 
+                                fill = integrated_pev)) +
+    geom_tile(color = "white", size = 0.5) +
+    geom_text(aes(label = sprintf("%.2f", integrated_pev)), 
+              color = "black", size = 3) +
+    scale_fill_gradient2(
+      low = "red", mid = "yellow", high = "green",
+      midpoint = 0.25,
+      name = "Integrated\nPEV",
+      limits = c(0, 0.5)
+    ) +
+    labs(
+      title = sprintf("Integrated PEV (%s threshold)", threshold_name),
+      subtitle = "Area under PEV curve - Higher is better",
+      x = "Season",
+      y = NULL  # Remove y-axis label
+    ) +
+    theme_minimal() +
+    theme(
+      axis.text.y = element_text(size = 10, hjust = 1),  # Adjust y-axis text
+      axis.text.x = element_text(size = 10),
+      plot.margin = margin(10, 10, 10, 50),  # Add left margin for labels
+      panel.grid = element_blank()  # Remove grid for cleaner look
+    ) +
+    coord_fixed(ratio = 0.5)  # Adjust aspect ratio
+  
+  return(p)
+}
+
+
+# Main analysis function
+run_pev_analysis <- function(cv_results) {
+  
+  cat("\n========== PEV ANALYSIS ==========\n")
+  
+  # Calculate PEV curves
+  cat("Calculating PEV curves...\n")
+  pev_curves <- calculate_pev_curves(cv_results, use_percentiles = TRUE)
+  
+  # Calculate integrated PEV
+  cat("Calculating integrated PEV...\n")
+  integrated_pev <- calculate_integrated_pev(pev_curves)
+  
+  # Print summary
+  cat("\n===== INTEGRATED PEV SUMMARY =====\n")
+  summary_table <- integrated_pev %>%
+    filter(threshold_name %in% c("P75", "P90")) %>%
+    select(experiment, season, threshold_name, integrated_pev, max_pev, optimal_cl) %>%
+    arrange(experiment, season, threshold_name)
+  
+  print(summary_table)
+  
+  # Create visualizations
+  cat("\nCreating visualizations...\n")
+  
+  # Plot for each season
+  plots <- list()
+  for(seas in unique(pev_curves$season)) {
+    plots[[seas]] <- plot_pev_comparison(pev_curves, seas, "P90")
+  }
+  
+  # Heatmap
+  heatmap <- plot_pev_heatmap(integrated_pev, "P90")
+  
+  # Save results
+  write.csv(integrated_pev, "pev_integrated_results.csv", row.names = FALSE)
+  
+  return(list(
+    curves = pev_curves,
+    integrated = integrated_pev,
+    plots = plots,
+    heatmap = heatmap
+  ))
+}
+
+
+```
+
+# Enhanced cross-validation with PEV
+```{r}
+# Enhanced cross-validation with PEV
+run_cross_validation_with_pev <- function(data,
+                                          train_source = "KNMI",
+                                          test_source = "KNMI",
+                                          lead_time = 6,
+                                          training_days = 30,
+                                          threshold_percentiles = c(75, 90, 95)) {
+  
+  # Run standard cross-validation first
+  cv_results <- run_cross_validation_emos(
+    data = data,
+    train_source = train_source,
+    test_source = test_source,
+    lead_time = lead_time,
+    training_days = training_days
+  )
+  
+  if(is.null(cv_results)) return(NULL)
+  
+  # Calculate PEV for different thresholds
+  pev_results <- list()
+  
+  for(thresh_pct in threshold_percentiles) {
+    
+    # Group by experiment and season
+    grouped_results <- cv_results %>%
+      group_by(experiment, season, train_source, test_source) %>%
+      nest()
+    
+    # Calculate PEV for each group
+    pev_summary <- grouped_results %>%
+      mutate(
+        pev_curve = map(data, ~calculate_pev_curve(.x, thresh_pct)),
+        integrated_pev = map_dbl(pev_curve, calculate_integrated_pev),
+        threshold_pct = thresh_pct
+      )
+    
+    pev_results[[paste0("thresh_", thresh_pct)]] <- pev_summary
+  }
+  
+  # Combine PEV results
+  all_pev <- bind_rows(pev_results) %>%
+    select(-data, -pev_curve)  # Remove nested columns for summary
+  
+  return(list(
+    cv_results = cv_results,
+    pev_summary = all_pev
+  ))
+}
+```
+
+
+

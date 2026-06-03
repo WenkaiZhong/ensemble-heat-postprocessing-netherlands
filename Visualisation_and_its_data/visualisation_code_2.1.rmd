@@ -11,6 +11,7 @@ library(rnaturalearth)      # ne_countries()
 library(rnaturalearthhires) # scale = "large" 
 library(ggrepel)            # geom_text_repel, geom_label_repel
 library(here)  
+library(tidyr)
 
 # Function 1: Basic Station Map with Temperature/WBGT Distribution
 plot_station_temperature_map <- function(data, 

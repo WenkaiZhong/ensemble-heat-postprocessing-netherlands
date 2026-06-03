@@ -1,0 +1,732 @@
+#only return read from station close to target coord
+```{r}
+#install.packages("geosphere")
+library(geosphere)
+#install.packages("dplyr")
+library(dplyr)
+library(tidyverse)  
+#install.packages("ncdf4")
+library(ncdf4)
+
+
+```
+
+# 1. different dates have been observed by different stations
+
+# 2. only limit number of stations has recorded WetBulbTemperature_Celsius
+
+# 3. 2021 data has different varaible names comapre to 22 and 23 data, like ReportEndDateTime and LocalReportEndDateTime
+
+# 4. 2021 data does not have ExternalSiteId,
+
+#import data function
+```{r}
+import_WOW_day <- function(date_string) {
+  # Parse date
+  parts <- strsplit(date_string, "-")[[1]]
+  year <- parts[1]
+  month <- parts[2]
+  day <- parts[3]
+  
+  all_data <- list()
+  successful_hours <- c()
+  failed_hours <- c()
+  
+  # Set path based on year
+  if (year == "2021") {
+    folder <- here("data", paste0("WOW_", year))
+    file_ext <- "csv"
+    
+    # Loop through 00-23 hour files
+    for (hour in 0:23) {
+      hour_str <- sprintf("%02d", hour)
+      file_name <- paste0("WOW_NL_", year, month, day, hour_str, ".", file_ext)
+      file_path <- file.path(folder, file_name)
+      
+      if (file.exists(file_path)) {
+        tryCatch({
+          data <- read.csv2(file_path, stringsAsFactors = FALSE)
+          if (nrow(data) > 0) {
+            # Convert "False"/"True" strings to logical
+            if("IsOfficial" %in% names(data) && is.character(data$IsOfficial)) {
+              data$IsOfficial <- data$IsOfficial == "True"
+            }
+            
+            # Create ExternalSiteId for 2021 data if it doesn't exist
+            if(!"ExternalSiteId" %in% names(data)) {
+              data <- data %>%
+                mutate(
+                  lat_rounded = round(as.numeric(Latitude), 6),
+                  lon_rounded = round(as.numeric(Longitude), 6),
+                  ExternalSiteId = paste0("WOW_", lat_rounded, "_", lon_rounded)
+                ) %>%
+                select(-lat_rounded, -lon_rounded)
+            }
+            
+            all_data[[length(all_data) + 1]] <- data
+            successful_hours <- c(successful_hours, hour)
+          } else {
+            failed_hours <- c(failed_hours, hour)
+          }
+        }, error = function(e) {
+          cat("Error reading", file_name, ":", e$message, "\n")
+          failed_hours <- c(failed_hours, hour)
+        })
+      } else {
+        failed_hours <- c(failed_hours, hour)
+      }
+    }
+    
+  } else if (year %in% c("2022", "2023")) {
+    # Original code for 2022-2023
+    if (requireNamespace("RcppSimdJson", quietly = TRUE)) {
+      install.packages("RcppSimdJson")
+      library(RcppSimdJson)
+      json_reader <- function(path) {
+        json_text <- readLines(path, warn = FALSE)
+        json_text <- paste(json_text, collapse = "")
+        RcppSimdJson::fparse(json_text)
+      }
+    } else {
+      install.packages("jsonlite")
+      library(jsonlite)
+      json_reader <- fromJSON
+    }
+    
+    folder <- here("data", paste0("WOW_", year), year)
+    file_ext <- "json"
+    
+    for (hour in 0:23) {
+      hour_str <- sprintf("%02d", hour)
+      file_name <- paste0("WOW_NL_", year, month, day, hour_str, ".", file_ext)
+      file_path <- file.path(folder, file_name)
+      
+      if (file.exists(file_path)) {
+        tryCatch({
+          if (file.info(file_path)$size == 0) {
+            failed_hours <- c(failed_hours, hour)
+            next
+          }
+          
+          json_data <- json_reader(file_path)
+          
+          if (!is.null(json_data$Object)) {
+            all_data[[length(all_data) + 1]] <- json_data$Object
+            successful_hours <- c(successful_hours, hour)
+          } else {
+            failed_hours <- c(failed_hours, hour)
+          }
+          
+        }, error = function(e) {
+          failed_hours <- c(failed_hours, hour)
+        })
+      } else {
+        failed_hours <- c(failed_hours, hour)
+      }
+    }
+  } else {
+    cat("Unsupported year:", year, "\n")
+    return(NULL)
+  }
+  
+  # Combine all files
+  if (length(all_data) > 0) {
+    combined_data <- tryCatch({
+      do.call(rbind, all_data)
+    }, error = function(e) {
+      dplyr::bind_rows(all_data)
+    })
+    
+    if (nrow(combined_data) == 0) {
+      cat("Warning: Combined data has 0 rows\n")
+      return(NULL)
+    }
+    
+    # === HANDLE DATETIME CONVERSIONS FIRST (BEFORE VARIABLE SELECTION) ===
+    if (year == "2021") {
+      # Check what datetime columns exist in the raw 2021 data
+      datetime_cols_2021 <- intersect(names(combined_data), 
+                                      c("CreatedDateTime", "ReportEndDateTime", 
+                                        "ReportStartDateTime", "LocalReportEndDateTime"))
+      
+      # For 2021, the original data might have different column names or formats
+      # Let's check and handle each possibility
+      if ("ReportEndDateTime" %in% names(combined_data)) {
+        # Try different possible formats for 2021
+        combined_data$ReportEndDateTime <- tryCatch({
+          as.POSIXct(combined_data$ReportEndDateTime, 
+                    format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
+        }, error = function(e) {
+          tryCatch({
+            as.POSIXct(combined_data$ReportEndDateTime, 
+                      format = "%d-%m-%Y %H:%M:%S", tz = "Europe/Amsterdam") %>%
+              with_tz("UTC")
+          }, error = function(e2) {
+            # If still fails, try another format
+            as.POSIXct(combined_data$ReportEndDateTime, tz = "UTC")
+          })
+        })
+      }
+      
+      if ("CreatedDateTime" %in% names(combined_data)) {
+        combined_data$CreatedDateTime <- tryCatch({
+          as.POSIXct(combined_data$CreatedDateTime, 
+                    format = "%Y-%m-%dT%H:%M:%S", tz = "UTC")
+        }, error = function(e) {
+          tryCatch({
+            as.POSIXct(combined_data$CreatedDateTime, 
+                      format = "%d-%m-%Y %H:%M:%S", tz = "Europe/Amsterdam") %>%
+              with_tz("UTC")
+          }, error = function(e2) {
+            as.POSIXct(combined_data$CreatedDateTime, tz = "UTC")
+          })
+        })
+      }
+      
+      # Handle LocalReportEndDateTime if it exists (2021 specific)
+      if ("LocalReportEndDateTime" %in% names(combined_data) && 
+          !"ReportEndDateTime" %in% names(combined_data)) {
+        combined_data$ReportEndDateTime <- as.POSIXct(combined_data$LocalReportEndDateTime,
+                                                      format = "%d-%m-%Y %H:%M:%S",
+                                                      tz = "Europe/Amsterdam") %>%
+                                          with_tz("UTC")
+      }
+      
+      # Create ReportStartDateTime if missing
+      if (!"ReportStartDateTime" %in% names(combined_data)) {
+        combined_data$ReportStartDateTime <- combined_data$ReportEndDateTime - 600
+      } else if (!is.POSIXct(combined_data$ReportStartDateTime)) {
+        combined_data$ReportStartDateTime <- tryCatch({
+          as.POSIXct(combined_data$ReportStartDateTime, 
+                    format = "%d-%m-%Y %H:%M:%S", 
+                    tz = "Europe/Amsterdam") %>%
+            with_tz("UTC")
+        }, error = function(e) {
+          combined_data$ReportEndDateTime - 600
+        })
+      }
+      
+    } else {
+      # 2022-2023 datetime handling
+      combined_data <- combined_data %>%
+        mutate(
+          ReportStartDateTime = as.POSIXct(ReportStartDateTime, 
+                                         format = "%Y-%m-%dT%H:%M:%S", 
+                                         tz = "UTC"),
+          ReportEndDateTime = as.POSIXct(ReportEndDateTime, 
+                                       format = "%Y-%m-%dT%H:%M:%S", 
+                                       tz = "UTC"),
+          CreatedDateTime = as.POSIXct(CreatedDateTime, 
+                                     format = "%Y-%m-%dT%H:%M:%S", 
+                                     tz = "UTC")
+        )
+    }
+    
+    # === NOW STANDARDIZE VARIABLE NAMES ===
+    
+    # Define core variables to keep
+    core_vars <- c(
+      "ExternalSiteId",
+      "ReportStartDateTime", 
+      "ReportEndDateTime",
+      "CreatedDateTime",
+      "Latitude",
+      "Longitude", 
+      "Height",
+      "ObservationType",
+      "SubmissionType",
+      "CollectionName",
+      "Version",
+      "IsOfficial",
+      "IsPublic",
+      "IsFlagged",
+      "VisibilityCode",
+      "WeatherDiary",
+      
+      # Temperature variables
+      "DryBulbTemperature_Celsius",
+      "DewPointTemperature_Celsius",
+      
+      # Humidity
+      "RelativeHumidity",
+      
+      # Pressure
+      "AirPressure_Hectopascal",
+      "MeanSeaLevelPressure_Hectopascal",
+      
+      # Rainfall
+      "RainfallAmount_Millimetre",
+      "RainfallRate_MillimetrePerHour",
+      "IsTraceRainfallAmount",
+      
+      # Wind
+      "WindDirection",
+      "WindSpeed_MetrePerSecond",
+      "WindGust_MetrePerSecond",
+      "WindGustDirection",
+      
+      # Additional variables from 2022-2023
+      "SoftwareType",
+      "IsDcnn",
+      "IsLatestVersion",
+      "ExternalId",
+      "SoilMoisture_Percent",
+      "SoilTemperature10cm_Celsius",
+      "PresentWeatherCodeSimple"
+    )
+    
+    # Keep only variables that exist in the data
+    vars_to_keep <- intersect(names(combined_data), core_vars)
+    combined_data <- combined_data %>%
+      select(all_of(vars_to_keep))
+    
+    # Add missing essential variables as NA if they don't exist
+    essential_vars <- c("ExternalSiteId", "ReportEndDateTime", 
+                       "Latitude", "Longitude", "DryBulbTemperature_Celsius", 
+                       "RelativeHumidity")
+    
+    for(var in essential_vars) {
+      if(!var %in% names(combined_data)) {
+        combined_data[[var]] <- NA
+        warning(paste("Essential variable", var, "was missing and added as NA"))
+      }
+    }
+    
+    # Final filtering - remove official stations
+    combined_data <- combined_data %>%
+      filter(IsOfficial == FALSE | is.na(IsOfficial))
+    
+    # Convert numeric columns
+    numeric_cols <- c("Latitude", "Longitude", "Height",
+                     "DryBulbTemperature_Celsius", "DewPointTemperature_Celsius",
+                     "RelativeHumidity", "AirPressure_Hectopascal", 
+                     "MeanSeaLevelPressure_Hectopascal",
+                     "RainfallAmount_Millimetre", "RainfallRate_MillimetrePerHour",
+                     "WindSpeed_MetrePerSecond", "WindGust_MetrePerSecond",
+                     "SoilMoisture_Percent", "SoilTemperature10cm_Celsius",
+                     "WindDirection")
+    
+    for(col in numeric_cols) {
+      if(col %in% names(combined_data)) {
+        combined_data[[col]] <- as.numeric(combined_data[[col]])
+      }
+    }
+    
+    # Sort by time and station for consistency
+    combined_data <- combined_data %>%
+      arrange(ReportEndDateTime, ExternalSiteId)
+    
+    return(combined_data)
+    
+  } else {
+    cat("No data successfully read for", date_string, "\n")
+    return(NULL)
+  }
+}
+
+
+system.time({
+  x <- import_WOW_day("2021-01-31")
+})#8.4
+#x%>%filter(ExternalSiteId == 926656002)
+
+x
+names(x)
+```
+#quality control
+```{r}
+# Quality Flag Definitions
+# ========================
+
+# **Flag 0 (Pass):**
+# - All checks passed, no rules triggered
+
+# **Flag 1 (Suspicious):**
+# 1. Rapid temperature change: >5°C change within 1 hour
+# 2. Stuck values: 3 consecutive identical temperature readings  
+# 3. Spatial deviation: >5°C difference from median of stations within 5km
+
+# **Flag 2 (Error):**
+# 1. Temperature out of bounds: <-50°C or >60°C
+# 2. Humidity out of bounds: <0% or >100%
+# 3. Wind speed out of bounds: <0 m/s or >50 m/s
+# 4. Pressure out of bounds: <870 hPa or >1080 hPa
+# 5. Dew point paradox: dew point temperature > dry bulb temperature
+# 6. Wind gust paradox: gust speed < average wind speed
+
+
+# Layer 1: Rule-based Quality Control
+qc_layer1 <- function(df) {
+  
+  # Initialize quality flags
+  df$qc_flag <- 0  # 0=pass, 1=suspicious, 2=error
+  
+  # 1. Physical range checks
+  df$qc_flag[df$DryBulbTemperature_Celsius < -50 | 
+             df$DryBulbTemperature_Celsius > 60] <- 2
+  df$qc_flag[df$RelativeHumidity < 0 | 
+             df$RelativeHumidity > 100] <- 2
+  df$qc_flag[df$WindSpeed_MetrePerSecond < 0 | 
+             df$WindSpeed_MetrePerSecond > 50] <- 2
+  df$qc_flag[df$MeanSeaLevelPressure_Hectopascal < 870 | 
+             df$MeanSeaLevelPressure_Hectopascal > 1080] <- 2
+  df$qc_flag[is.na(df$DryBulbTemperature_Celsius) | 
+           is.na(df$RelativeHumidity)] <- 2#check NA
+  
+  # 2. Physical consistency checks
+  # Dew point cannot exceed dry bulb temperature
+  df$qc_flag[df$DewPointTemperature_Celsius > 
+             df$DryBulbTemperature_Celsius] <- 2
+  
+  # Wind gust must be >= average wind speed
+  df$qc_flag[!is.na(df$WindGust_MetrePerSecond) & 
+             df$WindGust_MetrePerSecond < df$WindSpeed_MetrePerSecond] <- 2
+  
+  # 3. Temporal consistency checks (grouped by station)
+  df <- df %>%
+    group_by(ExternalSiteId) %>%
+    arrange(ReportStartDateTime) %>%
+    mutate(
+      # Temperature change rate
+      temp_change = abs(DryBulbTemperature_Celsius - 
+                       lag(DryBulbTemperature_Celsius)),
+      time_diff = as.numeric(difftime(ReportStartDateTime, 
+                                      lag(ReportStartDateTime), 
+                                      units = "hours")),
+      # Check hourly change rate (>5°C/hour is suspicious)
+      qc_flag = ifelse(!is.na(temp_change) & 
+                      time_diff <= 1 & 
+                      temp_change > 5, 
+                      pmax(qc_flag, 1), qc_flag),
+      # Check for stuck values (3 consecutive identical readings)
+      temp_const = (DryBulbTemperature_Celsius == lag(DryBulbTemperature_Celsius) &
+                   DryBulbTemperature_Celsius == lag(DryBulbTemperature_Celsius, 2)),
+      qc_flag = ifelse(!is.na(temp_const) & temp_const, 
+                      pmax(qc_flag, 1), qc_flag)
+    ) %>%
+    ungroup()
+  
+  # 4. Spatial consistency check (simplified version)
+  # For each timestamp, calculate deviation from neighboring stations
+  spatial_check <- function(df_time) {
+    coords <- df_time[, c("Longitude", "Latitude")]
+    dists <- as.matrix(dist(coords))
+    
+    for(i in 1:nrow(df_time)) {
+      # Find neighbors within ~5km
+      neighbors <- which(dists[i,] > 0 & dists[i,] < 0.05)  # ~5km in degrees
+      if(length(neighbors) > 2) {
+        neighbor_temps <- df_time$DryBulbTemperature_Celsius[neighbors]
+        temp_diff <- abs(df_time$DryBulbTemperature_Celsius[i] - 
+                        median(neighbor_temps, na.rm = TRUE))
+        # Temperature difference >5°C from neighbors is suspicious
+        if(!is.na(temp_diff) & temp_diff > 5) {
+          df_time$qc_flag[i] <- pmax(df_time$qc_flag[i], 1)
+        }
+      }
+    }
+    return(df_time)
+  }
+  
+  # Apply spatial check on sampled timestamps (for efficiency)
+  sample_times <- sample(unique(df$ReportStartDateTime), 
+                        min(50, length(unique(df$ReportStartDateTime))))
+  
+  df_spatial <- df %>%
+    filter(ReportStartDateTime %in% sample_times) %>%
+    group_by(ReportStartDateTime) %>%
+    group_modify(~spatial_check(.x)) %>%
+    ungroup()
+  
+  # Update original dataframe with spatial check results
+  df <- df %>%
+    left_join(df_spatial[, c("ExternalSiteId", "ReportStartDateTime", "qc_flag")],
+              by = c("ExternalSiteId", "ReportStartDateTime"),
+              suffix = c("", "_spatial")) %>%
+    mutate(qc_flag = pmax(qc_flag, qc_flag_spatial, na.rm = TRUE))
+  
+  return(df)
+}
+
+# Usage example
+library(dplyr)
+df_cleaned <- qc_layer1(x)
+
+# Keep only passed and suspicious data for analysis
+df_for_analysis <- df_cleaned %>% 
+  filter(qc_flag < 2)
+```
+
+#Divide station into different qulities
+```{r}
+station_classification_chen <- function(df_cleaned, reference_stations = NULL) {
+  
+  station_stats <- df_cleaned %>%
+    group_by(ExternalSiteId) %>%
+    summarise(
+      total = n(),
+      pass_count = sum(qc_flag == 0, na.rm = TRUE),
+      suspicious_count = sum(qc_flag == 1, na.rm = TRUE),
+      fail_count = sum(qc_flag == 2, na.rm = TRUE),
+      pass_rate = pass_count / total,
+      fail_rate = fail_count / total,
+      
+      # Critical failure check (physical impossibilities)
+      critical_fails = sum(qc_flag == 2 & 
+                          (DryBulbTemperature_Celsius < -50 | 
+                           DryBulbTemperature_Celsius > 60 |
+                           RelativeHumidity < 0 | 
+                           RelativeHumidity > 100), na.rm = TRUE)
+    ) %>%
+    mutate(
+      # Three-tier classification
+      # quality_category = case_when(
+      #   # Stations with critical failures → Low
+      #   critical_fails > 0 ~ "Low",
+      #   
+      #   # Stations with any error flags → Low (your requirement)
+      #   fail_count > 0 ~ "Low",
+      #   
+      #   # High quality: >95% pass rate
+      #   pass_rate > 0.95 ~ "High",
+      #   
+      #   # Medium quality: >85% pass rate
+      #   pass_rate > 0.85 ~ "Medium",
+      #   
+      #   # Otherwise Low
+      #   TRUE ~ "Low"
+      # ),
+      
+      quality_category = case_when(
+      # Any error flags (fail_count > 0) → Low quality
+      fail_count > 0 ~ "Low",
+  
+      # For stations with NO failures, classify by pass rate:
+      # High quality: ≥90% pass rate
+      pass_rate >= 0.9 ~ "High",
+  
+      # Medium quality: ≥70% pass rate but <90%
+      pass_rate >= 0.5 ~ "Medium",
+  
+      # Otherwise Low (pass rate <70%)
+      TRUE ~ "Low"
+      ),
+      
+      )
+    
+  
+  return(station_stats)
+}
+
+# Usage with your data
+station_class <- station_classification_chen(df_cleaned)
+station_class
+```
+
+#only return read from station close to target coord
+```{r}
+library(geosphere)
+library(dplyr)
+
+import_WOW_nearest_stations <- function(date_string, target_lat, target_lon, 
+                                       n_stations = 5, 
+                                       quality_filter = TRUE,
+                                       min_quality = "Medium") {
+  
+  # Import WOW data - already standardized with ExternalSiteId
+  wow_data <- import_WOW_day(date_string)
+  
+  if (is.null(wow_data) || nrow(wow_data) == 0) {
+    return(NULL)
+  }
+  
+  if (!"ExternalSiteId" %in% names(wow_data)) {
+    stop("ExternalSiteId column missing - check import_WOW_day function")
+  }
+  
+  # Apply quality control layer first
+  wow_data_qc <- qc_layer1(wow_data)
+  
+  # Calculate station quality metrics
+  station_quality <- wow_data_qc %>%
+    filter(!is.na(Latitude) & !is.na(Longitude)) %>%
+    group_by(ExternalSiteId) %>%
+    summarise(
+      Latitude = first(Latitude),
+      Longitude = first(Longitude),
+      n_obs = n(),
+      
+      # QC metrics
+      pass_count = sum(qc_flag == 0, na.rm = TRUE),
+      suspicious_count = sum(qc_flag == 1, na.rm = TRUE),
+      fail_count = sum(qc_flag == 2, na.rm = TRUE),
+      pass_rate = pass_count / n_obs,
+      fail_rate = fail_count / n_obs,
+      
+      # Data completeness metrics
+      temp_completeness = sum(!is.na(DryBulbTemperature_Celsius)) / n_obs,
+      humidity_completeness = sum(!is.na(RelativeHumidity)) / n_obs,
+      
+      # Additional quality indicators
+      temp_variance = var(DryBulbTemperature_Celsius, na.rm = TRUE),
+      data_availability = sum(!is.na(DryBulbTemperature_Celsius) & 
+                             !is.na(RelativeHumidity)) / n_obs,
+      .groups = 'drop'
+    ) %>%
+    mutate(
+      # Station classification based on your criteria
+      quality_category = case_when(
+        fail_count > 0 ~ "Low",              # Any failures → Low
+        pass_rate >= 0.9 ~ "High",           # 90%+ pass → High  
+        pass_rate >= 0.7 ~ "Medium",         # 70-90% pass → Medium
+        TRUE ~ "Low"                         # Otherwise → Low
+      ),
+      
+      # Calculate confidence score for weighted analysis
+      confidence_score = case_when(
+        quality_category == "High" ~ pass_rate * data_availability,
+        quality_category == "Medium" ~ pass_rate * data_availability * 0.7,
+        quality_category == "Low" ~ pass_rate * data_availability * 0.3
+      ),
+      
+      # Calculate distance to target
+      distance_km = distHaversine(
+        cbind(Longitude, Latitude),
+        cbind(target_lon, target_lat)
+      ) / 1000
+    )
+  
+  # Check if we have any valid stations
+  if (nrow(station_quality) == 0) {
+    return(NULL)
+  }
+  
+  # Apply quality filter if requested
+  if (quality_filter) {
+    quality_levels <- c("High", "Medium", "Low")
+    min_level_index <- which(quality_levels == min_quality)
+    acceptable_levels <- quality_levels[1:min_level_index]
+    
+    station_quality <- station_quality %>%
+      filter(quality_category %in% acceptable_levels)
+    
+    if (nrow(station_quality) == 0) {
+      warning(paste("No stations meeting minimum quality level:", min_quality))
+      return(NULL)
+    }
+  }
+  
+  # Adjust n_stations if fewer stations are available
+  n_available <- min(n_stations, nrow(station_quality))
+  
+  # Select nearest stations with quality weighting
+  # Option 1: Simple distance-based selection
+  nearest_station_ids <- station_quality %>%
+    arrange(distance_km) %>%
+    slice_head(n = n_available) %>%
+    pull(ExternalSiteId)
+  
+  # Option 2: Quality-weighted selection (uncomment to use)
+  # nearest_station_ids <- station_quality %>%
+  #   mutate(
+  #     # Combine distance and quality scores
+  #     # Lower distance and higher quality = better score
+  #     selection_score = (1 / (distance_km + 1)) * confidence_score
+  #   ) %>%
+  #   arrange(desc(selection_score)) %>%
+  #   slice_head(n = n_available) %>%
+  #   pull(ExternalSiteId)
+  
+  # Return empty if no stations selected
+  if (length(nearest_station_ids) == 0) {
+    return(NULL)
+  }
+  
+  # Filter QC'd data to only include observations from selected stations
+  nearest_obs <- wow_data_qc %>%
+    filter(ExternalSiteId %in% nearest_station_ids) %>%
+    # Only keep passed and suspicious data (exclude failures)
+    filter(qc_flag < 2) %>%
+    # Add station metadata
+    left_join(
+      station_quality %>% 
+        select(ExternalSiteId, distance_km, n_obs, 
+               pass_rate, fail_rate,
+               temp_completeness, humidity_completeness,
+               quality_category, confidence_score),
+      by = "ExternalSiteId"
+    ) %>%
+    rename(distance_to_target_km = distance_km) %>%
+    mutate(
+      target_lat = target_lat,
+      target_lon = target_lon,
+      search_date = date_string,
+      # Add station ranking by distance
+      station_rank = dense_rank(distance_to_target_km)
+    ) %>%
+    arrange(distance_to_target_km, ReportEndDateTime)
+  
+  return(nearest_obs)
+}
+
+# Usage examples:
+
+# Get nearest 5 stations regardless of quality
+nearest_all <- import_WOW_nearest_stations(
+  date_string = "2021-01-15",
+  target_lat = 52.5,
+  target_lon = 4.9,
+  n_stations = 5,
+  quality_filter = FALSE
+)
+
+# Get only High and Medium quality stations
+nearest_good <- import_WOW_nearest_stations(
+  date_string = "2021-01-15", 
+  target_lat = 52.5,
+  target_lon = 4.9,
+  n_stations = 5,
+  quality_filter = TRUE,
+  min_quality = "Medium"
+)
+
+# Get only High quality stations
+nearest_best <- import_WOW_nearest_stations(
+  date_string = "2021-01-15",
+  target_lat = 52.5,
+  target_lon = 4.9,
+  n_stations = 5,
+  quality_filter = TRUE,
+  min_quality = "High"
+)
+
+
+#####time is not continuous
+```
+
+
+#find station information in a specific date
+```{r}
+get_unique_wow_stations <- function(date_str) {
+  # import date
+  data_day <- import_WOW_day(date_str)
+  
+  # extract station info
+  unique_stations <- data_day %>%
+    select(ExternalSiteId,Latitude, Longitude, Height) %>%
+    mutate(
+      site_id = ExternalSiteId,
+      Latitude = as.numeric(Latitude),
+      Longitude = as.numeric(Longitude),
+      Height = as.numeric(Height)
+    ) %>%
+    distinct()
+  return(unique_stations)
+}
+
+unique_stations <- get_unique_wow_stations("2022-07-15")
+
+unique_stations
+```
+
+

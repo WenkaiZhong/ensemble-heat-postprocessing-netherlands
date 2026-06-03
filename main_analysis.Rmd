@@ -2218,19 +2218,19 @@ cat("\nOverall method performance:\n")
 print(overall_improvements)
 
 # 6. Save results
-output_dir <- "wow_comparison_results/"
-if(!dir.exists(output_dir)) dir.create(output_dir)
+output_dir <- here("results", "wow_comparison_results")
+if(!dir.exists(output_dir)) dir.create(output_dir, recursive = TRUE)
 
-write.csv(results_vs_wow, 
-         file.path(output_dir, "all_results_vs_wow.csv"), 
+write.csv(results_vs_wow,
+         file.path(output_dir, "all_results_vs_wow.csv"),
          row.names = FALSE)
 
-write.csv(comparison_wow, 
-         file.path(output_dir, "comparison_table_vs_wow.csv"), 
+write.csv(comparison_wow,
+         file.path(output_dir, "comparison_table_vs_wow.csv"),
          row.names = FALSE)
 
-write.csv(roc_analysis$auc_summary, 
-         file.path(output_dir, "roc_auc_summary.csv"), 
+write.csv(roc_analysis$auc_summary,
+         file.path(output_dir, "roc_auc_summary.csv"),
          row.names = FALSE)
 
 cat(sprintf("\n✓ Results saved to %s\n", output_dir))
@@ -2518,11 +2518,11 @@ seasonal_analysis <- analyze_seasonal_performance(
 plot_seasonal_analysis(seasonal_analysis)
 
 # Save results
-write.csv(seasonal_analysis$seasonal_comparison_full, 
-          "seasonal_crps_full.csv", row.names = FALSE)
+write.csv(seasonal_analysis$seasonal_comparison_full,
+          here("results", "some_results", "seasonal_crps_full.csv"), row.names = FALSE)
 
-write.csv(seasonal_analysis$seasonal_avg, 
-          "seasonal_summary.csv", row.names = FALSE)
+write.csv(seasonal_analysis$seasonal_avg,
+          here("results", "some_results", "seasonal_summary.csv"), row.names = FALSE)
 
 cat("\n✓ Seasonal analysis complete!\n")
 
@@ -2880,8 +2880,8 @@ run_pev_analysis <- function(results, data_amsterdam, data_rotterdam) {
   create_pev_latex_table(pev_comparison %>% filter(threshold == 25))
   
   # Save results
-  write.csv(pev_curves, "pev_curves_full.csv", row.names = FALSE)
-  write.csv(pev_comparison, "pev_comparison_table.csv", row.names = FALSE)
+  write.csv(pev_curves, here("results", "some_results", "pev_curves_full.csv"), row.names = FALSE)
+  write.csv(pev_comparison, here("results", "some_results", "pev_comparison_table.csv"), row.names = FALSE)
   
   cat("\n✓ PEV analysis complete!\n")
   
