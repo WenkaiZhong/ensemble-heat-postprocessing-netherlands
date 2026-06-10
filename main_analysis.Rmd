@@ -1901,6 +1901,7 @@ analyze_vs_wow <- function(data_amsterdam, data_rotterdam,
           error_vs_wow = pred_mean - wow_max,
           abs_error_vs_wow = abs(error_vs_wow)
         )
+        
       
       all_results[[city]] <- city_results
     }
@@ -1956,7 +1957,7 @@ analyze_vs_wow <- function(data_amsterdam, data_rotterdam,
 
 
 ```
-#ROC-AUC Analysis for Extreme Events
+
 ```{r}
 # ROC-AUC analysis for extreme WBGT events
 calculate_roc_auc <- function(results, threshold = 25) {

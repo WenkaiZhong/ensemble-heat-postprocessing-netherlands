@@ -142,3 +142,87 @@ data%>%filter(LOCATION == "201_T_DV")%>%ggplot(., aes(x = DTG, y = T_DRYB_10, co
 
 ```
 
+
+# Build KNMI sensor inventory (all stations -> metadata/)
+
+Samples 4 mid-month days per year (1 per season) across 2021-2024 = 16 days
+total, aggregates sensor-level metadata (LOCATION, NAME, lat/lon, ALTITUDE,
+data coverage, mean temperature), and writes
+`metadata/knmi_station_sensor_inventory.csv`. See `metadata/README.md` for
+a full column dictionary and caveats.
+
+Note: KNMI raw files carry no sensor mounting height. ALTITUDE = station
+ground elevation (m AMSL). Variables `T_DRYB_10` / `T_DEWP_10` / `U_10`
+follow the WMO/KNMI standard 1.5 m screen height by convention, not from
+any field in the data.
+
+```{r build-knmi-sensor-inventory, eval=FALSE}
+# 4 seasons x 4 years = 16 sample days (mid-month each season).
+# Spanning all 4 seasons catches sensors that may only be active part of the year.
+sample_dates <- c(
+  "2021-01-15","2021-04-15","2021-07-15","2021-10-15",
+  "2022-01-15","2022-04-15","2022-07-15","2022-10-15",
+  "2023-01-15","2023-04-15","2023-07-15","2023-10-15",
+  "2024-01-15","2024-04-15","2024-07-15","2024-10-15"
+)
+
+# Build per-day inventory: one row per (LOCATION x sample_date)
+all_inv <- list()
+for (d in sample_dates) {
+  message("Importing ", d, " ...")
+  obs <- tryCatch(
+    import_knmi_data(d, data_path = "data/ToSend-01-20-2025/"),
+    error = function(e) { message("  failed: ", e$message); NULL }
+  )
+  if (is.null(obs)) next
+
+  all_inv[[d]] <- obs %>%
+    filter(!is.na(LOCATION)) %>%
+    # station_id = prefix before the first "_" in LOCATION (e.g. "240_T_ISAD" -> "240")
+    mutate(station_id = sub("_.*", "", LOCATION)) %>%
+    group_by(station_id, LOCATION, NAME, LATITUDE, LONGITUDE, ALTITUDE) %>%
+    summarise(
+      sample_date = d,
+      # n_obs: number of 10-min timestamps in this day (full day = 144 = 24h * 6)
+      n_obs       = n(),
+      # non-NA counts -- shows which sensors actually report each variable
+      n_T_DRYB    = sum(!is.na(T_DRYB_10)),
+      n_T_DEWP    = sum(!is.na(T_DEWP_10)),
+      n_U_10      = sum(!is.na(U_10)),
+      # daily mean temperature, used downstream as a cross-day average for sanity-checking
+      T_mean      = mean(T_DRYB_10, na.rm = TRUE),
+      .groups     = "drop"
+    )
+}
+
+# Collapse across sample days: one row per sensor (LOCATION).
+# Counts become totals across sampled days; ceiling = 16 * 144 = 2304.
+inventory <- bind_rows(all_inv) %>%
+  group_by(station_id, LOCATION, NAME, LATITUDE, LONGITUDE, ALTITUDE) %>%
+  summarise(
+    sample_dates   = paste(sort(unique(sample_date)), collapse = ";"),
+    # n_sample_dates: in how many of the 16 sampled days the sensor was present
+    n_sample_dates = n_distinct(sample_date),
+    total_obs      = sum(n_obs),
+    total_T_DRYB   = sum(n_T_DRYB),
+    total_T_DEWP   = sum(n_T_DEWP),
+    total_U_10     = sum(n_U_10),
+    # mean of the per-day mean temperatures -- spans all 4 seasons, so closer to
+    # the annual mean (~10 C in NL) than to summer-only mean. Pure sanity check.
+    T_mean_sampled = round(mean(T_mean, na.rm = TRUE), 1),
+    .groups        = "drop"
+  ) %>%
+  arrange(suppressWarnings(as.integer(station_id)), LOCATION)
+
+out_path <- "metadata/knmi_station_sensor_inventory.csv"
+write.csv(inventory, out_path, row.names = FALSE)
+
+message(sprintf("Saved %d sensor locations across %d stations to %s",
+                nrow(inventory),
+                n_distinct(inventory$station_id),
+                out_path))
+
+# Quick view: Amsterdam (240) and Rotterdam (344) sensors
+inventory %>% filter(station_id %in% c("240", "344"))
+```
+
